@@ -1,0 +1,33 @@
+# StratifyPOS implementation progress
+
+| Area | Status |
+| --- | --- |
+| 1. POS and offline sync | PARTIAL |
+| 2. Products and services | DONE |
+| 3. Inventory | DONE |
+| 4. Reports and analytics | DONE |
+| 5. Team and attendance | DONE |
+| 6. Branches and tables | DONE |
+| 7. Promotions and discounts | DONE |
+| 8. Settings and billing | DONE |
+| 9. Super Admin | DONE |
+| 10. Manual payment verification | DONE |
+| 11. Member access control | DONE |
+| 12. Backup and recovery | BLOCKED |
+| 13. UI and UX | PARTIAL |
+| 14. Public marketing website | DONE |
+
+- Baseline. `server/src/migrate.js` and `server/sql/003–020` provide ordered transactional upgrades, restricted tenant grants, and automatic configurable trials. The default is five days, and customers can skip an available trial when selecting a paid plan. Existing trial end dates are preserved. Run `npm run migrate` and reseed the trusted administrator with `npm run seed`.
+- POS and catalog. `server/src/index.js`, `server/src/offline-grants.js`, `server/src/catalog-options.js`, `client/src/main.tsx` and `client/src/offline/` implement idempotent checkout, durable offline cash sales for dine-in/takeout/delivery, automatic retry, review states, shared receipts, independent option prices, and recipe overrides. Review preserves the original sale and supports retrying after fixing the underlying conflict. Online managers and owners can reconcile signed sales from another cashier on the same device and within an authorized branch, including after the original cashier is disabled. The original cashier remains on the order and the reviewer is recorded separately. Permanent pricing conflicts still require a manager adjustment workflow.
+- Inventory. `server/src/inventory.js` and Inventory UI implement stock item types, units, thresholds, branch balances, stock movements and transfers. Existing businesses keep shared stock until the owner enables branch inventory. Existing stock then remains available to transfer from the unallocated pool.
+- Reporting. `server/src/reports.js`, `server/src/report-exports.js` and Reports UI use the same branch/date filters for data and downloads. Inventory balances show the current snapshot. Dates default to `Asia/Manila` and can use the server's `REPORT_TIME_ZONE`.
+- Business operations. `server/src/attendance.js`, `branch-operations.js` and `promotions.js` back team accounts, same-day and overnight shifts, breaks, late starts, branch calendars, table occupancy, promotion scopes and limits, buy-one-get-one, bundles, and loyalty. Online checkout quotes advanced promotions. Offline checkout supports simple transaction discounts.
+- Billing. `server/src/index.js` and Settings/Super Admin screens persist plan requests, review decisions, adjusted plans and rejection reasons. Approved requests create pending GCash payments. Verification applies the plan once and records subscription history.
+- Verified on isolated PostgreSQL 18. Fresh, repeat and legacy schema upgrades, transactional checkout and stock, RLS, filtered Excel/PDF, attendance, promotions, payment evidence and review, public inquiries and verified recovery. Run `node --test test/checkout.integration.test.js` from `server` with `STRATIFYPOS_TEST_DATABASE_URL` pointing to an isolated migrated database. Set `STRATIFYPOS_TEST_RECOVERY_DATABASE_URL` to a separate empty test database to exercise encrypted recovery.
+- Client typecheck and workspace `npm run build` pass with the Rollup WASM override. Chromium passed offline dine-in reconciliation, payment upload and review, and the inquiry inbox. Chromium, Firefox and WebKit passed mobile marketing, live plans and registration navigation. Edge and standalone Safari remain unverified.
+- Local configuration. The installed PostgreSQL 18 service on port 5432 now hosts `coffeesaas`. Restored four businesses and two orders from the supplied archive, skipping the legacy adminpack extension. Applied migrations through 020 and seeded the local Super Admin. The preview on port 47474 and API on port 4000 passed sign-in and authenticated admin overview checks. Port 47473 serves older cached previews. The offline P-256 private key is stored outside the workspace and the client is built with its matching public key.
+- Payment verification. Migration 014, `server/src/billing-payments.js`, `client/src/billing.tsx` and billing screens add configurable GCash/Maya/MariBank/custom methods, validated private screenshots, duplicate-reference checks, and audited manual review. Customer payment instructions must be configured before enabling each method.
+- Platform and access. `server/src/admin-platform.js`, `workspace-access.js` and `client/src/platform-pages.tsx` add Super Admin pages, custom paid plans and discounts, plan and business access overrides, configurable roles, member permissions, branch RLS and append-only activity.
+- Recovery. `server/src/backup-worker.js` and `backup-storage.js` provide encrypted manual and scheduled backups, retention, download, notifications and verification into an empty recovery database. Local tests verified tamper rejection, recovery including receipt images, and refusal to overwrite an existing database. Off-server storage and SMTP verification are blocked on deployment configuration. Configure `BACKUP_STORAGE_DIR` as a mounted off-server volume with a `.stratifypos-backup-store` marker, provide a stable 32-byte Base64 `BACKUP_ENCRYPTION_KEY_B64`, configure PostgreSQL utilities and the optional SMTP recipient, and run `npm run backup:worker`. The empty recovery database needs the runtime PostgreSQL role available at cluster level.
+- Website. `client/src/marketing.tsx`, `site-routing.ts` and `client/public/previews/` provide the public site, live pricing and feature comparison, actual demo screenshots, and an inquiry inbox. Local routes use `/` for the site and `/app` for the workspace. Separate-origin pricing, registration and login passed on loopback hosts. Configure `VITE_APP_ORIGIN`, `VITE_MARKETING_ORIGIN`, `VITE_API_URL`, server `CLIENT_URL` and `APP_PUBLIC_URL` for deployment.
+- Next. Configure payment instructions and off-server backup storage. Verify deployment and implement an audited adjustment workflow for permanent offline pricing conflicts.
