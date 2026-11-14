@@ -5043,3 +5043,39 @@ td strong,.metric>strong,.product-name,.cart-head h2,.total-row strong {color:va
 .offline-preparation { margin: 0 0 1rem; }
 .offline-preparation > summary { cursor: pointer; font-weight: 700; color: var(--sp-teal,#00655b); }
 .offline-preparation[open] > summary { margin-bottom: .6rem; }
+
+
+/* StratifyPOS development workflows: compact, touch-friendly operational controls. */
+.operations-compact { margin: 0 0 14px; border: 1px solid var(--border, #e2e8f0);
+  border-radius: 12px; background: var(--surface, #fff); overflow: hidden; }
+.operations-compact summary { display: flex; align-items: center; gap: 9px; cursor: pointer;
+  padding: 11px 14px; font-weight: 650; font-size: 13px; list-style-position: inside; }
+.operations-compact summary svg { flex-shrink: 0; }
+.operations-state { color: var(--muted, #64748b); font-weight: 500; margin-left: auto; font-size: 12px; }
+.operations-body { padding: 0 14px 14px; }
+.operations-fields { display: flex; flex-wrap: wrap; align-items: end; gap: 9px; margin: 10px 0; }
+.operations-fields .field { margin: 0; flex: 1 1 150px; min-width: 140px; }
+.operations-fields > input { flex: 1 1 155px; min-width: 120px; }
+.operations-fields .btn { min-height: 37px; }
+.operations-note { font-size: 12px; color: var(--muted, #64748b); line-height: 1.6; margin: 5px 0 12px; }
+.operations-toggle { display: flex; align-items: center; gap: 8px; font-size: 12px;
+  line-height: 1.4; margin: 9px 0 12px; cursor: pointer; }
+.operations-toggle input { width: 16px; height: 16px; accent-color: #1c7457; }
+.operations-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.operations-modal { display: grid; gap: 13px; max-height: min(73vh, 650px); overflow-y: auto; }
+.operations-lines { display: grid; gap: 8px; }
+.operations-line { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(72px, 100px)
+  minmax(90px, 116px) auto; gap: 8px; align-items: center; }
+.operations-line:has(> span:first-child) { grid-template-columns: minmax(170px, 1fr) minmax(90px, 150px); }
+.operations-line > span { display: flex; flex-direction: column; min-width: 0; }
+.operations-line small { font-size: 11px; color: #64748b; }
+.operations-line input,.operations-line select { min-width: 0; width: 100%; }
+.operations-actions { display: flex; gap: 13px; align-items: center; }
+@media (max-width: 640px) {
+  .operations-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .operations-fields .field,.operations-fields > input { min-width: 0; width: 100%; }
+  .operations-fields .btn { width: 100%; }
+  .operations-line { grid-template-columns: minmax(0, 1fr) 70px; }
+  .operations-line > input:nth-of-type(2) { grid-column: 1; }
+  .operations-line > button { grid-column: 2; }
+}
