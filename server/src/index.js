@@ -17,7 +17,7 @@ import { platformRouter } from './admin-platform.js';
 import { backupRouter } from './backup-routes.js';
 import { inTransaction, planId, platformAudit, priceSubscription, provisionBusiness } from './platform.js';
 import { pool, scoped, rows, one } from './db.js';
-import { listProducts, saveVariations, replaceRecipe } from './catalog-options.js';
+import { listProducts, saveVariations, replaceRecipe, productOptions, catalogConflict } from './catalog-options.js';
 import { changeStock, inventoryQuantity, listBalances, recordMovement, transferStock } from './inventory.js';
 import { registerRegisterRoutes } from './register-routes.js';
 import { registerPurchasingRoutes } from './purchasing-routes.js';
@@ -1396,7 +1396,7 @@ app.delete(
 app.get('/api/shop/products', data(async (db, req) => {
     const products = await listProducts(db, req.tenant);
     if (req.modules.products) return products;
-    return products.map(({ cost_cents, recipe, variations, ...product }) => ({ ...product,
+    return products.map(({ cost_cents, recipe, stock_item_id, variations, ...product }) => ({ ...product,
         variations: variations.map(({ recipe, ...variant }) => variant) }));
 }));
 
@@ -1430,14 +1430,19 @@ app.post(
             );
         }
 
-        const p = await one(
-            d,
-            `INSERT INTO products
-             (tenant_id,name,price_cents,cost_cents,category_id,description,active)
-             VALUES($1,$2,$3,$4,$5,$6,$7)
-             RETURNING *`,
-            [r.tenant, name.trim(), price_cents, cost_cents, category_id, description, active]
-        );
+        const extras = await productOptions(d,r.tenant,r.body);
+        let p;
+        try {
+            p = await one(d,
+                `INSERT INTO products
+                 (tenant_id,name,price_cents,cost_cents,category_id,description,active,
+                  product_type,sku,barcode,brand,manufacturer,stock_item_id,image_url)
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                 RETURNING *`,
+                [r.tenant,name.trim(),price_cents,cost_cents,category_id,description,active,
+                    extras.product_type,extras.sku,extras.barcode,extras.brand,extras.manufacturer,
+                    extras.stock_item_id,extras.image_url]);
+        } catch (error) { throw catalogConflict(error); }
 
         await saveVariations(d, r.tenant, p, variations);
         await replaceRecipe(d, r.tenant, 'product', p.id, recipe);
@@ -1475,26 +1480,24 @@ app.put(
             );
         }
 
-        const p = await one(
-            d,
-            `UPDATE products
-             SET name=$1,price_cents=$2,cost_cents=$3,
-                 category_id=$4,description=$5,active=$6
-             WHERE id=$7 AND tenant_id=$8
-             RETURNING *`,
-            [
-                name,
-                price_cents,
-                cost_cents,
-                category_id,
-                description,
-                active,
-                r.params.id,
-                r.tenant
-            ]
-        );
-
-        if (!p) throw fail(404, 'Not found');
+        const previous = await one(d,
+            'SELECT * FROM products WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
+            [r.params.id,r.tenant]);
+        if (!previous) throw fail(404, 'Product unavailable');
+        const extras = await productOptions(d,r.tenant,r.body,previous);
+        let p;
+        try {
+            p = await one(d,
+                `UPDATE products
+                 SET name=$1,price_cents=$2,cost_cents=$3,
+                     category_id=$4,description=$5,active=$6,
+                     product_type=$9,sku=$10,barcode=$11,brand=$12,
+                     manufacturer=$13,stock_item_id=$14,image_url=$15
+                 WHERE id=$7 AND tenant_id=$8 RETURNING *`,
+                [name.trim(),price_cents,cost_cents,category_id,description,active,
+                 r.params.id,r.tenant,extras.product_type,extras.sku,extras.barcode,
+                 extras.brand,extras.manufacturer,extras.stock_item_id,extras.image_url]);
+        } catch (error) { throw catalogConflict(error); }
 
         if (variations !== undefined) await saveVariations(d, r.tenant, p, variations);
         if (recipe !== undefined) await replaceRecipe(d, r.tenant, 'product', p.id, recipe);
