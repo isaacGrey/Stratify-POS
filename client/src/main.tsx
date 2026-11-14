@@ -2979,7 +2979,7 @@ function Reports({ request }) {
         <Panel title="Report filters">
             <div className="form-grid padded">
                 <Field label="Period"><select value={period} onChange={e => filter(setPeriod, e.target.value)}>
-                    <option value="daily">Today</option><option value="monthly">This month</option>
+                    <option value="daily">Today</option><option value="yesterday">Yesterday</option><option value="weekly">This week</option><option value="monthly">This month</option>
                     <option value="yearly">This year</option><option value="custom">Custom dates</option>
                 </select></Field>
                 <Field label="Branch"><select value={branch} onChange={e => filter(setBranch, e.target.value)}>
@@ -2997,11 +2997,14 @@ function Reports({ request }) {
         {!valid && <Empty text="Choose a start date and an end date." />}
         {valid && !data && !err && <Load />}
         {summary && <>
+            <div className="operations-sales-summary"><span>Gross receipts <strong>{money(summary.gross_revenue_cents)}</strong></span>
+                <span>Cash refunds <strong>{money(summary.refund_cents)}</strong></span>
+                <span>Net receipts <strong>{money(summary.revenue_cents)}</strong></span></div>
             <div className="metrics">
-                <Metric label="Paid sales" val={money(summary.revenue_cents)} icon={Wallet} tint="brown" foot="Includes tax and service" />
-                <Metric label="Paid orders" val={summary.orders} icon={Receipt} tint="sage" foot="Selected period" />
+                <Metric label="Net collected sales" val={money(summary.revenue_cents)} icon={Wallet} tint="brown" foot="Gross payments less cash refunds" />
+                <Metric label="Sales transactions" val={summary.orders} icon={Receipt} tint="sage" foot="Including partially refunded" />
                 <Metric label="Average order" val={money(summary.orders ? Number(summary.revenue_cents) / summary.orders : 0)}
-                    icon={ShoppingBag} tint="peach" foot="Paid sales per order" />
+                    icon={ShoppingBag} tint="peach" foot="Net sales per transaction" />
                 <Metric label="Recorded expenses" val={money(summary.expenses_cents)} icon={CreditCard} tint="sand" foot="Selected period" />
             </div>
             <div className="chip-row">
