@@ -2676,6 +2676,9 @@ const checkout = quote => data(async (d, r) => {
                  WHERE addon_id=ANY($5::uuid[]) AND tenant_id=$2`,
                 [p.id, r.tenant, variant?.use_custom_recipe ?? false, variant?.id ?? null, addons.map(a => a.id)]
             );
+            // When ingredients are consumed, capture their actual unit costs.
+            // Otherwise preserve the catalog product cost at the instant of sale.
+            lines[lines.length - 1].hasRecipe = recipe.length > 0;
 
             for (const ing of recipe) {
                 const used = (consumption.get(ing.ingredient_id) || 0) +
@@ -2747,9 +2750,31 @@ const checkout = quote => data(async (d, r) => {
             need(!register_session_id, 'Only cash sales may use a cash register');
         }
 
-        for (const [id, qty] of sortedConsumption) {
-            await changeStock(d, r.tenant, id, branch_id, -qty, settings.branch_stock_enabled);
+        const costComponents = [];
+        for (const line of lines) {
+            if (!line.hasRecipe) {
+                const unitCost = Number(line.product.cost_cents || 0);
+                if (unitCost) costComponents.push({
+                    kind:'product',source:line.product.id,quantity:line.qty,unitCost,
+                    extended:(unitCost*line.qty).toFixed(3)
+                });
+            }
         }
+        // The stock row is locked and its unit cost snapshot is read in the
+        // same transaction as the inventory debit and receipt insert.
+        for (const [id, qty] of sortedConsumption) {
+            const updatedStock = await changeStock(d, r.tenant, id, branch_id, -qty, settings.branch_stock_enabled);
+            const unitCost = Number(updatedStock.unit_cost_cents);
+            costComponents.push({
+                kind:'stock',source:id,quantity:qty,unitCost,
+                extended:(unitCost*qty).toFixed(3)
+            });
+        }
+        const estimatedCogsCents = Math.round(
+            costComponents.reduce((sum,component)=>sum+Number(component.extended),0)
+        );
+        need(Number.isSafeInteger(estimatedCogsCents) && estimatedCogsCents >= 0,
+            'Unable to estimate transaction stock costs');
         const order = await one(
             d,
             `INSERT INTO orders
@@ -2758,11 +2783,11 @@ const checkout = quote => data(async (d, r) => {
                 subtotal_cents,discount_cents,tax_cents,service_cents,
                 total_cents,payment_method,amount_tendered_cents,
                 change_cents,promo_code,client_sale_id,checkout_fingerprint,offline_device_id,
-                created_at,synced_at,receipt_footer,promotion_id,loyalty_account_id,register_session_id
+                created_at,synced_at,receipt_footer,promotion_id,loyalty_account_id,register_session_id,estimated_cogs_cents
              )
              VALUES
              ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-              COALESCE($18::timestamptz, now()), CASE WHEN $17::uuid IS NOT NULL THEN now() END,$19,$20,$21,$22)
+              COALESCE($18::timestamptz, now()), CASE WHEN $17::uuid IS NOT NULL THEN now() END,$19,$20,$21,$22,$23)
              RETURNING *`,
             [
                 r.tenant,
@@ -2782,7 +2807,8 @@ const checkout = quote => data(async (d, r) => {
                     : 0,
                 promotion.code, client_sale_id ?? null, fingerprint, offline?.device_id ?? null,
                 offline?.created_at ?? null, grant?.receiptFooter ?? settings.receipt_footer, promotion.id, loyalty?.id ?? null,
-                cashRegister?.id ?? null
+                cashRegister?.id ?? null,
+                estimatedCogsCents
             ]
         );
 
@@ -2809,6 +2835,14 @@ const checkout = quote => data(async (d, r) => {
             );
         }
 
+        for (const component of costComponents) {
+            await d.query(
+                'INSERT INTO order_cost_components(tenant_id,branch_id,order_id,source_kind,source_id,quantity,unit_cost_cents,extended_cost_cents) ' +
+                'VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
+                [r.tenant,branch_id,order.id,component.kind,component.source,
+                    component.quantity,component.unitCost,component.extended]
+            );
+        }
         for (const [id, qty] of sortedConsumption) {
             await recordMovement(d, r.tenant, id, branch_id, -qty, 'sale', 'order', r.user.id, order.id);
         }
