@@ -22,6 +22,7 @@ import { changeStock, inventoryQuantity, listBalances, recordMovement, transferS
 import { registerRegisterRoutes } from './register-routes.js';
 import { registerPurchasingRoutes } from './purchasing-routes.js';
 import { registerRefundRoutes } from './refund-routes.js';
+import { registerHoldRoutes } from './holds-routes.js';
 import { loadReport, reportFilters } from './reports.js';
 import { attendanceHistory, attendanceStatus, attendanceSummary, recordAttendance } from './attendance.js';
 import { branchSchedule, saveBranchSchedule } from './branch-operations.js';
@@ -2489,6 +2490,7 @@ const operational = { data, permit, need, fail, audit, ident, money, stockMode }
 registerRegisterRoutes(app, operational);
 registerPurchasingRoutes(app, operational);
 registerRefundRoutes(app, operational);
+registerHoldRoutes(app, operational);
 
 // Transaction cost snapshots are manager/report data, not cashier receipt data.
 const publicOrder = ({ estimated_cogs_cents, ...order }) => order;
@@ -2521,7 +2523,7 @@ const checkout = quote => data(async (d, r) => {
             'Invalid order type/payment'
         );
 
-        const { client_sale_id, offline, expected, register_session_id = null } = r.body;
+        const { client_sale_id, offline, expected, register_session_id = null, held_order_id = null } = r.body;
         const supervisorReplay = r.params.originalCashier !== undefined;
         const cashierId = r.params.originalCashier || r.user.id;
         if (supervisorReplay) need(ident(cashierId) && offline, 'A signed offline sale is required');
@@ -2547,6 +2549,20 @@ const checkout = quote => data(async (d, r) => {
             }
         }
 
+        let heldOrder = null;
+        if (!quote && held_order_id) {
+            need(ident(held_order_id) && client_sale_id,
+                'A held order requires a valid checkout request ID');
+            heldOrder = await one(d,
+                'SELECT * FROM parked_orders WHERE tenant_id=$1 AND id=$2 FOR UPDATE',
+                [r.tenant, held_order_id]);
+            if (!heldOrder) throw fail(404,'Held order unavailable');
+            if (heldOrder.status !== 'held') throw fail(409,'This held order was already finalized or cancelled');
+            if (heldOrder.branch_id !== branch_id) throw fail(409,'Held order belongs to another branch');
+            if (r.role === 'cashier' && heldOrder.cashier_id !== r.user.id) {
+                throw fail(403,'This held order belongs to another cashier');
+            }
+        }
         let grant = null;
         if (offline !== undefined) {
             need(offline && client_sale_id && ident(offline.device_id) && payment_method === 'cash' &&
@@ -2866,6 +2882,14 @@ const checkout = quote => data(async (d, r) => {
                 'INSERT INTO register_movements(tenant_id,branch_id,session_id,actor_id,kind,amount_cents,reason,reference_id) ' +
                 "VALUES($1,$2,$3,$4,'sale',$5,'POS checkout',$6)",
                 [r.tenant,branch_id,cashRegister.id,r.user.id,total,order.id]);
+        }
+        if (heldOrder) {
+            await d.query(
+                "UPDATE parked_orders SET status='completed',completed_order_id=$3,completed_at=now(),updated_at=now() " +
+                'WHERE tenant_id=$1 AND id=$2',
+                [r.tenant,heldOrder.id,order.id]
+            );
+            await audit(d,r,'order.hold_completed',{held_order_id:heldOrder.id,order_id:order.id});
         }
         await recordLoyalty(d, r.tenant, loyalty?.id, order.id,
             loyalty ? Math.floor(taxable / settings.loyalty_cents_per_point) : 0, promotion.points || 0);
