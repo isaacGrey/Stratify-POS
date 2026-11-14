@@ -35,6 +35,15 @@ export function registerRegisterRoutes(app, { data, permit, need, fail, audit, i
             [req.tenant, branch, req.role !== 'cashier', req.user.id]);
     }));
 
+    app.put('/api/shop/register/policy', permit('owner'), data(async (db, req) => {
+        need(typeof req.body.require_cash_register === 'boolean', 'Invalid cash register requirement');
+        const settings = await one(db,
+            'UPDATE shop_settings SET require_cash_register=$2 WHERE tenant_id=$1 RETURNING *',
+            [req.tenant,req.body.require_cash_register]);
+        await audit(db,req,'register.policy_updated',{required:req.body.require_cash_register});
+        return settings;
+    }));
+
     app.post('/api/shop/register/open', permit('owner','manager','cashier'), data(async (db, req) => {
         const { branch_id, opening_cents } = req.body;
         need(ident(branch_id) && money(opening_cents), 'Invalid branch or opening cash');
