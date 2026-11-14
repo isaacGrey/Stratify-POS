@@ -1902,6 +1902,8 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
     const { data: settings, load: reloadSettings, err: settingsError } = useLoad(request, 'settings');
     const { data: promotions, load: reloadPromotions, err: promotionError } = useLoad(request, 'promotions');
     const [branch, setBranch] = useState('');
+    const {data:heldOrders,load:reloadHolds} = useLoad(request,!offline && branch ? 'holds?branch_id='+branch : null);
+    const [heldOrderId,setHeldOrderId] = useState<string | null>(null);
     const [category, setCategory] = useState('all');
     const [search, setSearch] = useState('');
     const [cart, setCart] = useState([]);
@@ -1989,6 +1991,57 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
             p.variations?.some(v=>v.sku?.toLowerCase().includes(searchTerm) ||
                 v.barcode?.toLowerCase().includes(searchTerm))));
 
+    async function parkOrder() {
+        await act(async () => {
+            if (offline || unconfirmed || heldOrderId || !branch || !cart.length) {
+                throw new Error('Only a new online cart can be parked.');
+            }
+            await request('holds','POST',{
+                id:crypto.randomUUID(),branch_id:branch,items:cartPayload,order_type:orderType,
+                table_id:orderType==='dine_in' ? table||null : null,
+                promo_code:promoKey||null,loyalty_code:rewardKey||null
+            });
+            setCart([]);setPromo('');setRewardCode('');setTable('');
+            setTender('');
+            reloadHolds();
+        });
+    }
+    async function resumeOrder(id:string) {
+        await act(async()=>{
+            if(offline || unconfirmed) throw new Error('Reconnect and finish the pending checkout first.');
+            if(cart.length && !window.confirm('Replace the current cart with the saved order?')) return;
+            const draft=await request('holds/'+id);
+            if(draft.status!=='held') throw new Error('This order has already been processed.');
+            const restored=draft.items.map(item=>{
+                const product=products.find(p=>p.id===item.product_id && p.active);
+                const variation=item.variation_id ?
+                    product?.variations?.find(v=>v.id===item.variation_id) : null;
+                const addonList=(item.addon_ids||[]).map(id=>addons.find(a=>a.id===id && a.active));
+                if(!product || item.variation_id && !variation || addonList.some(a=>!a)) {
+                    throw new Error('An item in the held order is no longer available. Review or cancel this draft.');
+                }
+                const key=[product.id,variation?.id||'',...addonList.map(a=>a.id).sort()].join(':');
+                const unit=variationPrice(product,variation)+addonList.reduce((sum,a)=>sum+a.price_cents,0);
+                return {key,product,variation,addonList,qty:item.quantity,unit};
+            });
+            setBranch(draft.branch_id);
+            setCart(restored);
+            setOrderType(draft.order_type);
+            setTable(draft.table_id||'');
+            setPromo(draft.promo_code||'');
+            setRewardCode(draft.loyalty_code||'');
+            setHeldOrderId(draft.id);
+            setTender('');
+        });
+    }
+    async function cancelHeldOrder(id:string) {
+        await act(async()=>{
+            if(!window.confirm('Cancel this held order? This cannot be undone.')) return;
+            await request('holds/'+id+'/cancel','POST',{});
+            if(heldOrderId===id) {setHeldOrderId(null);setCart([]);}
+            reloadHolds();
+        });
+    }
     async function checkout() {
         if (submitting.current) return;
         submitting.current = true;
@@ -1998,6 +2051,7 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
                 if (!unconfirmed && (!branch || !totals)) throw new Error('Select a branch and confirm the order total.');
                 const payload = unconfirmed || {
                     client_sale_id: crypto.randomUUID(), branch_id: branch,
+                    held_order_id: !offline ? heldOrderId : null,
                     order_type: orderType,
                     table_id: orderType === 'dine_in' ? table || null : null,
                     payment_method: cash ? 'cash' : method,
@@ -2016,6 +2070,8 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
                     reloadTables();
                     setTable('');
                     setCart([]);
+                    setHeldOrderId(null);
+                    reloadHolds();
                     setPromo('');
                     setRewardCode('');
                     setTender('');
@@ -2046,6 +2102,25 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
         <CashRegisterPanel request={request} branchId={branch} online={!offline} cashierId={cashierId}
             role={role} required={Boolean(settings.require_cash_register)}
             onSessionChange={setRegisterId} onPolicyUpdated={reloadSettings}/>
+        {!offline && <details className="operations-compact">
+            <summary><ClipboardList size={16}/> Held orders
+                <span className="operations-state">{heldOrders?.length || 0} pending</span></summary>
+            <div className="operations-body">
+                <p className="operations-note">Parked orders do not reserve inventory, product prices or tables. Totals are recalculated at checkout.</p>
+                {heldOrderId && <p className="flash warning">Resumed order selected. Completing checkout will finalize it.</p>}
+                <div className="operations-held-list">{(heldOrders||[]).map(draft=>
+                    <div className="operations-held-row" key={draft.id}>
+                        <span><strong>{draft.items.reduce((total,item)=>total+item.quantity,0)} items · {draft.order_type.replace('_',' ')}</strong>
+                            <small>{fmt(draft.created_at)} · {draft.id.slice(0,8)}</small></span>
+                        <Button secondary disabled={busy || !!unconfirmed} onClick={()=>resumeOrder(draft.id)}>Resume</Button>
+                        <button className="text-link" disabled={busy || !!unconfirmed}
+                            onClick={()=>cancelHeldOrder(draft.id)}>Cancel</button>
+                    </div>)}
+                </div>
+                {!heldOrders?.length && <p className="operations-note">No held orders in this branch.</p>}
+                <button className="text-link" onClick={reloadHolds}>Refresh held orders</button>
+            </div>
+        </details>}
         {unconfirmed && <p className="flash warning" role="status">A checkout is awaiting confirmation. {offline ? 'Reconnect to check its status.' : 'Retry the same transaction below.'}</p>}
         <div className="pos-layout">
             <section className="pos-menu">
@@ -2140,6 +2215,12 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
                         <div className="total-row"><span>Total</span><strong>{money(totals.total_cents)}</strong></div>
                         {cash && cart.length > 0 && change >= 0 && <div className="checkout-row"><span>Change</span><strong>{money(change)}</strong></div>}
                     </>}
+                    {!offline && heldOrderId && <button className="text-link"
+                        disabled={busy || !!unconfirmed} onClick={()=>{
+                            setCart([]);setHeldOrderId(null);setPromo('');setRewardCode('');setTender('');
+                        }}>Return held order to list</button>}
+                    {!offline && !heldOrderId && <Button secondary disabled={busy || !!unconfirmed ||
+                        !branch || !cart.length || cartUnavailable} onClick={parkOrder}>Hold / park order</Button>}
                     <Button onClick={checkout} disabled={busy || (unconfirmed ? offline : !branch || !cart.length || cartUnavailable || !totals || (cash && change < 0) ||
                         (!offline && cash && settings.require_cash_register && !registerId))}>
                         {busy ? 'Processing…' : unconfirmed ? 'Retry checkout' : offline ? 'Save cash sale' : 'Complete sale'} <ArrowRight size={18} />
