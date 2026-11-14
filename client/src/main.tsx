@@ -3,6 +3,7 @@ import { apiOrigin, publicUrl } from './site-routing';
 import { BusinessEditor, moduleLabels, PermissionFields, PlatformPage } from './platform-pages';
 import { Button, Empty, Field, Heading, Load, Modal, Panel, Table, fmt, money, pesos, useLoad } from './ui';
 import { fetchPaymentMethods, paymentStageLabel, ReceiptSubmission, type PaymentMethod } from './billing';
+import { CashRegisterPanel, PurchasingPage, RefundDialog } from './operations';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { LayoutDashboard, Coffee, Package, ChartNoAxesCombined, Users, Settings, Store, LogOut, Plus, Search, ShoppingCart, Minus, Trash2, Receipt, ArrowRight, ChevronDown, Menu, X, Bell, Clock, CalendarDays, Tags, CreditCard, ShieldCheck, Sun, Layers, UserRound, ClipboardList, CheckCircle2, Printer, ArrowUpRight, Wallet, AlertTriangle } from 'lucide-react';
@@ -64,6 +65,7 @@ const routes: [
     ['pos', 'Point of Sale', ScanLine],
     ['products', 'Products & Services', ShoppingBag],
     ['inventory', 'Inventory Management', Boxes],
+    ['purchasing', 'Purchasing & Suppliers', ClipboardList],
     ['orders', 'Sales & Transactions', Receipt],
     ['reports', 'Reports & Analytics', ChartNoAxesCombined],
     ['staff', 'Team & Attendance', Users],
@@ -428,7 +430,7 @@ const visibleRoutes = routes.filter(([id]) => {
     if (id==='settings') return canManage && (allowed('settings') || allowed('billing'));
     if (id==='staff') return allowed('staff') || allowed('attendance');
     if (id==='pos') return canSell && allowed('pos');
-    if (['branches','promotions','products','inventory'].includes(id)) return canManage && allowed(id);
+    if (['branches','promotions','products','inventory','purchasing'].includes(id)) return canManage && allowed(id);
     if (id==='reports') return currentShop?.modules ? allowed(id) : canManage;
     return allowed(id);
 });
@@ -618,7 +620,7 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
                 {localReceipt?.shop === shop && localReceipt.user === me.user.id &&
                     <ReceiptModal receipt={localReceipt.receipt} close={() => setLocalReceipt(null)} />}
                 <POS key={shop + ':' + me.user.id} scope={shop + ':' + me.user.id}
-                    request={posRequest} offline={offline} act={act} busy={busy} />
+                    request={posRequest} offline={offline} act={act} busy={busy} cashierId={me.user.id} role={role} />
             </>}
         </OfflinePOSGate>
     </OfflineSessionGuard>
@@ -651,12 +653,19 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
         />
 )}
 
+{/* PURCHASING */}
+{activePage === 'purchasing' && currentShop && serverAvailable === true && (
+    <PurchasingPage request={request}/>
+)}
+
 {/* SALES & TRANSACTIONS */}
 {activePage === 'orders' &&
     currentShop &&
     serverAvailable === true && (
         <Orders
             request={request}
+            role={role}
+            cashierId={me.user.id}
         />
 )}
 
@@ -1884,7 +1893,7 @@ function useCheckoutQuote(request, payload, version) {
     return quote?.payload === payload && quote.version === version ? quote : null;
 }
 
-function POS({ request, act, busy, offline, scope }) {
+function POS({ request, act, busy, offline, scope, cashierId, role }) {
     const { data: products, load: reload, err: productError } = useLoad(request, 'products');
     const { data: cats, err: categoryError } = useLoad(request, 'categories');
     const { data: branches, err: branchError } = useLoad(request, 'branches');
@@ -1901,6 +1910,7 @@ function POS({ request, act, busy, offline, scope }) {
     const [table, setTable] = useState('');
     const [method, setMethod] = useState('cash');
     const [tender, setTender] = useState('');
+    const [registerId,setRegisterId] = useState<string | null>(null);
     const [promo, setPromo] = useState('');
     const [rewardCode, setRewardCode] = useState('');
     const [quoteVersion, setQuoteVersion] = useState(0);
@@ -1986,6 +1996,7 @@ function POS({ request, act, busy, offline, scope }) {
                     order_type: orderType,
                     table_id: orderType === 'dine_in' ? table || null : null,
                     payment_method: cash ? 'cash' : method,
+                    register_session_id: !offline && cash ? registerId : null,
                     amount_tendered_cents: cash ? pesos(tender) : null,
                     promo_code: promoKey || null, loyalty_code: rewardKey || null, expected: totals, items: cartPayload
                 };
@@ -2027,6 +2038,9 @@ function POS({ request, act, busy, offline, scope }) {
             onChange={e => { setBranch(e.target.value); setTable(''); }} disabled={busy || !!unconfirmed}>
             {branches.filter(b => b.active).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select>} />
+        <CashRegisterPanel request={request} branchId={branch} online={!offline} cashierId={cashierId}
+            role={role} required={Boolean(settings.require_cash_register)}
+            onSessionChange={setRegisterId} onPolicyUpdated={reloadSettings}/>
         {unconfirmed && <p className="flash warning" role="status">A checkout is awaiting confirmation. {offline ? 'Reconnect to check its status.' : 'Retry the same transaction below.'}</p>}
         <div className="pos-layout">
             <section className="pos-menu">
@@ -2107,7 +2121,8 @@ function POS({ request, act, busy, offline, scope }) {
                         <div className="total-row"><span>Total</span><strong>{money(totals.total_cents)}</strong></div>
                         {cash && cart.length > 0 && change >= 0 && <div className="checkout-row"><span>Change</span><strong>{money(change)}</strong></div>}
                     </>}
-                    <Button onClick={checkout} disabled={busy || (unconfirmed ? offline : !branch || !cart.length || cartUnavailable || !totals || (cash && change < 0))}>
+                    <Button onClick={checkout} disabled={busy || (unconfirmed ? offline : !branch || !cart.length || cartUnavailable || !totals || (cash && change < 0) ||
+                        (!offline && cash && settings.require_cash_register && !registerId))}>
                         {busy ? 'Processing…' : unconfirmed ? 'Retry checkout' : offline ? 'Save cash sale' : 'Complete sale'} <ArrowRight size={18} />
                     </Button>
                 </div>
@@ -2865,7 +2880,42 @@ function Inventory({ request, act, role, limited }) {
         </Modal>}
     </>;
 }
-function Orders({ request }) { const { data } = useLoad(request, 'orders'); const [detail, setDetail] = useState(null); return <><Heading title="Transaction history" sub="Review sales and transactions in one place."/><Panel title="All transactions"><Table items={data || []} columns={[["order_number", "Order #", v => '#' + v], ['created_at', 'Date & time', fmt], ['cashier', 'Cashier'], ['order_type', 'Type', v => v.replace('_', ' ')], ['payment_method', 'Payment', v => v.toUpperCase()], ['total_cents', 'Total', money], ['id', 'Details', (_, x) => <button className="text-link" onClick={() => request('orders/' + x.id).then(setDetail)}>View</button>]]}/></Panel>{detail && <ReceiptModal receipt={{ ...detail, items: detail.items.map(i => ({ name: i.product_name, quantity: i.quantity, total_cents: i.total_cents, variation: i.variation_name, addons: i.addons })) }} close={() => setDetail(null)}/>}</>; }
+function Orders({ request, role, cashierId }) {
+    const { data, load, err } = useLoad(request, 'orders');
+    const [detail, setDetail] = useState(null);
+    const [refunding, setRefunding] = useState(null);
+    const [error,setError] = useState('');
+    const canRefund = role === 'owner' || role === 'manager';
+    return <>
+        <Heading title="Sales & transactions" sub="Review the payment ledger, reprint receipts and authorize cash refunds."/>
+        {(err || error) && <p role="alert" className="flash error">{err || error}</p>}
+        <Panel title="Transaction history">
+            <Table items={data || []} columns={[
+                ['order_number','Order #',v=>'#'+v],
+                ['created_at','Date & time',fmt],
+                ['cashier','Cashier'],
+                ['order_type','Type',v=>String(v).replace('_',' ')],
+                ['payment_method','Payment',v=>String(v).toUpperCase()],
+                ['status','Status',v=>String(v).replace('_',' ')],
+                ['total_cents','Total',money],
+                ['id','Actions',(_id,row)=><div className="operations-actions">
+                    <button className="text-link" onClick={()=>
+                        request('orders/'+row.id).then(setDetail).catch((e:any)=>setError(e.message))}>Receipt</button>
+                    {canRefund && row.payment_method==='cash' && row.status!=='refunded' &&
+                        <button className="text-link" onClick={()=>setRefunding(row)}>Refund</button>}
+                </div>]
+            ]}/>
+        </Panel>
+        {detail && <ReceiptModal receipt={{ ...detail,items:detail.items.map((i:any)=>({
+            name:i.product_name,quantity:i.quantity,total_cents:i.total_cents,
+            variation:i.variation_name,addons:i.addons
+        })) }} close={()=>setDetail(null)}/>}
+        {refunding && <RefundDialog request={request} order={refunding} cashierId={cashierId}
+            onClose={()=>setRefunding(null)} onDone={()=>{
+                setRefunding(null);load();
+            }}/>}
+    </>;
+}
 function Reports({ request }) {
     const [period, setPeriod] = useState('monthly');
     const [branch, setBranch] = useState('');
