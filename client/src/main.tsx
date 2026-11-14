@@ -1981,8 +1981,13 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
         checkoutTotals(subtotal, promoKey, promotions, settings.tax_basis_points, settings.service_basis_points);
     const cash = offline || method === 'cash';
     const change = totals && pesos(tender) - totals.total_cents;
+    const searchTerm=search.trim().toLowerCase();
     const filtered = products.filter(p => p.active && (category === 'all' || p.category_id === category) &&
-        p.name.toLowerCase().includes(search.toLowerCase()));
+        (p.name.toLowerCase().includes(searchTerm) ||
+            p.sku?.toLowerCase().includes(searchTerm) ||
+            p.barcode?.toLowerCase().includes(searchTerm) ||
+            p.variations?.some(v=>v.sku?.toLowerCase().includes(searchTerm) ||
+                v.barcode?.toLowerCase().includes(searchTerm))));
 
     async function checkout() {
         if (submitting.current) return;
@@ -2045,7 +2050,19 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
         <div className="pos-layout">
             <section className="pos-menu">
                 <div className="pos-toolbar"><div className="search"><Search size={19} />
-                    <input aria-label="Search products" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search products or services…" />
+                    <input aria-label="Search products" value={search} onChange={e => setSearch(e.target.value)}
+                        onKeyDown={e=>{
+                            if(e.key!=='Enter' || offline && unconfirmed) return;
+                            const code=search.trim().toUpperCase();
+                            if(!code) return;
+                            const match=products.find(p=>p.active && (p.sku===code || p.barcode===code ||
+                                p.variations?.some(v=>v.sku===code || v.barcode===code)));
+                            if(!match) return;
+                            const variant=match.variations?.find(v=>v.sku===code || v.barcode===code);
+                            add(match,variant?.id||'',[]);
+                            setSearch('');
+                        }}
+                        placeholder="Search or scan barcode / SKU…" />
                 </div></div>
                 <div className="chip-row">
                     <button className={'chip ' + (category === 'all' ? 'chip-on' : '')} onClick={() => setCategory('all')}>All items</button>
@@ -2055,7 +2072,9 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
                 <div className="product-grid">
                     {filtered.map(p => <button className="product-card" key={p.id} disabled={busy || !!unconfirmed}
                         onClick={() => p.variations?.length || addons.some(a => a.active) ? setCustom(p) : add(p)}>
-                        <div className="product-illustration"><span><ShoppingBag size={46} strokeWidth={1.5} /></span>
+                        <div className="product-illustration">{p.image_url
+                            ? <img className="operations-product-photo" src={p.image_url} alt="" loading="lazy" />
+                            : <span><ShoppingBag size={46} strokeWidth={1.5} /></span>}
                             <div className="product-add"><Plus size={18} /></div>
                         </div>
                         <div className="product-name">{p.name}</div>
@@ -2272,7 +2291,7 @@ function Products({ request, act, busy }) {
                 <h4>Sizes and variations</h4>
                 {form.variations.map((option, index) => <fieldset key={option.id ?? index}>
                     <legend>{option.name || 'New variation'}</legend>
-                    <div className="repeat-row">
+                    <div className="repeat-row operations-variation-row">
                         <input aria-label="Variation name" value={option.name} onChange={e => updateOption(index, { name: e.target.value })} />
                         <input aria-label="Variation price in PHP" type="number" min="0" step=".01" value={option.price}
                             onChange={e => updateOption(index, { price: e.target.value })} />
