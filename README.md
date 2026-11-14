@@ -17,7 +17,7 @@
 
 | Module | Current capability | Important limits |
 |---|---|---|
-| POS | Server-calculated carts, recipes, product variations and add-ons, cash/cashless **recording**, signed offline cash sales, idempotent checkout, dine-in/takeout/delivery, printed browser receipt, barcode and SKU search | No cashless provider capture, split tender, item-level split bills or certified fiscal receipts |
+| POS | Server-calculated carts, durable hold/park/resume drafts, recipes, product variations and add-ons, cash/cashless **recording**, signed offline cash sales, idempotent checkout, dine-in/takeout/delivery, printed browser receipt, barcode and SKU search | No cashless provider capture, split tender, item-level split bills or certified fiscal receipts; held orders do not reserve stock, tables or pricing |
 | Catalog | Products, services, menu items, bundles and non-stock types, tenant-unique SKU/barcodes including variants, image HTTPS URLs, recipes and direct physical-stock links | Image **uploads**, price tiers, expiration/serial controls and flexible advanced modifiers remain |
 | Inventory | Stock ledger, nonnegative checks, optional branch balances, transfers, ingredients, recipe and linked-stock deduction | No FIFO, batch/expiry, physical count approval workflow or procurement return |
 | Purchasing | Supplier records, purchase orders, partial receiving, duplicate receiving protection and atomic goods receipt | No supplier invoice matching, payable ledger or supplier-return workflow |
@@ -60,10 +60,11 @@ npm run dev
 
 ## Development branch additions
 
-Migrations `021`–`024` add operational ledgers, register reconciliation, purchase receipts, supervised cash refunds, cost snapshots, SKU/barcode registry, and direct physical-stock links. They are applied transactionally by `npm run migrate`. **Back up your database first**, test against a restored copy, and verify rollback/recovery before applying to a deployment with real data.
+Migrations `021`–`025` add operational ledgers, register reconciliation, purchase receipts, supervised cash refunds, cost snapshots, SKU/barcode registry, direct physical-stock links and held-order drafts. They are applied transactionally by `npm run migrate`. **Back up your database first**, test against a restored copy, and verify rollback/recovery before applying to a deployment with real data.
 
 ### Operational usage
 
+- **Hold or resume:** In the online POS, select **Hold / park order** to save an order draft; use **Held orders** to resume or cancel it. Drafts never reserve inventory, tables or prices, and checkout revalidates their current totals. Completion of the held draft is atomic with the paid sale.
 - **Open register:** POS → Cash register. The owner may require an open register for online cash checkout. Recorded sales, withdrawals and refunds affect the expected closing balance. Count cash physically before closing.
 - **Purchase stock:** Purchasing & Suppliers → New purchase order → Receive selected stock. Partial receipts, stock changes and movement ledger records commit together. Repeating the same receipt ID cannot add stock twice.
 - **Refund cash sale:** Sales & Transactions → Refund (owner/manager only). This records cash returned and optionally debits the current manager's open register. Manually inspect returned goods and separately authorize any inventory adjustment.
