@@ -2684,7 +2684,15 @@ const checkout = quote => data(async (d, r) => {
             );
             // When ingredients are consumed, capture their actual unit costs.
             // Otherwise preserve the catalog product cost at the instant of sale.
-            lines[lines.length - 1].hasRecipe = recipe.length > 0;
+            const directStockId = p.product_type === 'physical'
+                ? variant?.stock_item_id || p.stock_item_id : null;
+            if (directStockId) {
+                if (recipe.some(row=>row.ingredient_id===directStockId)) {
+                    throw fail(409, 'Product inventory link duplicates a recipe ingredient');
+                }
+                consumption.set(directStockId, (consumption.get(directStockId)||0) + x.quantity*1000);
+            }
+            lines[lines.length - 1].hasRecipe = recipe.length > 0 || Boolean(directStockId);
 
             for (const ing of recipe) {
                 const used = (consumption.get(ing.ingredient_id) || 0) +
