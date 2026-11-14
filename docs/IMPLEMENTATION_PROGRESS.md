@@ -3,19 +3,33 @@
 | Area | Status |
 | --- | --- |
 | 1. POS and offline sync | PARTIAL |
-| 2. Products and services | DONE |
-| 3. Inventory | DONE |
-| 4. Reports and analytics | DONE |
-| 5. Team and attendance | DONE |
-| 6. Branches and tables | DONE |
-| 7. Promotions and discounts | DONE |
-| 8. Settings and billing | DONE |
-| 9. Super Admin | DONE |
-| 10. Manual payment verification | DONE |
-| 11. Member access control | DONE |
+| 2. Products and services | PARTIAL — identifiers, types and direct stock working; upload/tier/UOM gaps |
+| 3. Inventory | PARTIAL — branch ledger/stock/purchasing working; batch/count/costing gaps |
+| 4. Reports and analytics | PARTIAL — refund/COGS net metrics; forecasting/tax gaps |
+| 5. Team and attendance | PARTIAL — scheduling/clock actions; corrections/payroll gaps |
+| 6. Branches and tables | PARTIAL — branch access, tables; terminal/reservation gaps |
+| 7. Promotions and discounts | PARTIAL — BOGO/loyalty; compliance/stacking gaps |
+| 8. Settings and billing | PARTIAL — manual subscription evidence; live billing absent |
+| 9. Super Admin | PARTIAL — existing management; licensing/operational hardening remain |
+| 10. Manual payment verification | IMPLEMENTED — manual confirmation, not gateway capture |
+| 11. Member access control | IMPLEMENTED — multi-tenant/branch rules; device security pending |
 | 12. Backup and recovery | BLOCKED |
 | 13. UI and UX | PARTIAL |
-| 14. Public marketing website | DONE |
+| 14. Public marketing website | IMPLEMENTED — responsive/client build; deployment checks pending |
+
+
+## Development branch increment (14 November 2026)
+
+**This update covers verified code, not full acceptance of the 18-section commercial proposal.** See [DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md) for the full outstanding list and acceptance gates.
+
+- **021:** cash register ledger/open-close/variance, authorized cash refunds, purchase orders and partial goods receipts with backend branch checks, RLS, append-only records and idempotency.
+- **022:** immutable checkout component cost snapshots and COGS estimates. Reports mark estimated gross profit unavailable for mixed historic sales without original costs.
+- **023–024:** product types, brands, SKU/barcodes for products and variations, direct physical-stock links and cross-catalog tenant-unique identifier registry. POS barcode/SKU search is scanner keyboard-wedge compatible.
+- **UI:** compact cash-register tools, supplier purchasing, supervised refunds, product metadata, barcode search and refund-aware reporting.
+- **Integration tests:** clean PostgreSQL 18 CI migration, original integration suite, new register/refund/purchase/physical-stock tests, client typecheck and Vite build.
+
+**Remaining critical gaps:** provider-verified electronic payments/refunds, hold/split payments and bills, compliant Philippine fiscal receipts and legally applicable discounts, physical returns/exchanges, offline device security and cash-drawer reconciliation, batch/expiration/cycle counts, full hardware testing and operational backup/restore procedures. This is a development branch; `main` has not been intentionally changed.
+
 
 - Baseline. `server/src/migrate.js` and `server/sql/003–020` provide ordered transactional upgrades, restricted tenant grants, and automatic configurable trials. The default is five days, and customers can skip an available trial when selecting a paid plan. Existing trial end dates are preserved. Run `npm run migrate` and reseed the trusted administrator with `npm run seed`.
 - POS and catalog. `server/src/index.js`, `server/src/offline-grants.js`, `server/src/catalog-options.js`, `client/src/main.tsx` and `client/src/offline/` implement idempotent checkout, durable offline cash sales for dine-in/takeout/delivery, automatic retry, review states, shared receipts, independent option prices, and recipe overrides. Review preserves the original sale and supports retrying after fixing the underlying conflict. Online managers and owners can reconcile signed sales from another cashier on the same device and within an authorized branch, including after the original cashier is disabled. The original cashier remains on the order and the reviewer is recorded separately. Permanent pricing conflicts still require a manager adjustment workflow.
