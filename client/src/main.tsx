@@ -2999,7 +2999,10 @@ function Reports({ request }) {
         {summary && <>
             <div className="operations-sales-summary"><span>Gross receipts <strong>{money(summary.gross_revenue_cents)}</strong></span>
                 <span>Cash refunds <strong>{money(summary.refund_cents)}</strong></span>
-                <span>Net receipts <strong>{money(summary.revenue_cents)}</strong></span></div>
+                <span>Net receipts <strong>{money(summary.revenue_cents)}</strong></span>
+                <span>Known COGS <strong>{money(summary.cogs_cents)} <small>({summary.cogs_covered_orders}/{summary.orders} costed)</small></strong></span>
+                <span>Estimated gross profit <strong>{summary.estimated_gross_profit_cents == null
+                    ? 'Unavailable · incomplete cost history' : money(summary.estimated_gross_profit_cents)}</strong></span></div>
             <div className="metrics">
                 <Metric label="Net collected sales" val={money(summary.revenue_cents)} icon={Wallet} tint="brown" foot="Gross payments less cash refunds" />
                 <Metric label="Sales transactions" val={summary.orders} icon={Receipt} tint="sage" foot="Including partially refunded" />
