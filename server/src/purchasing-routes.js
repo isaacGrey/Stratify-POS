@@ -149,7 +149,7 @@ export function registerPurchasingRoutes(app, { data, permit, need, fail, audit,
                 'INSERT INTO purchase_receipt_lines(tenant_id,receipt_id,purchase_order_line_id,quantity,unit_cost_cents) ' +
                 'VALUES($1,$2,$3,$4,$5)',
                 [req.tenant,receipt.id,line.line_id,line.quantity,line.unit_cost_cents]);
-            await recordMovement(db,req.tenant,line.ingredient_id,po.branch_id,line.quantity,
+            await recordMovement(db,req.tenant,line.ingredient_id,branchMode ? po.branch_id : null,line.quantity,
                 'stock_in','Purchase order '+po.id,req.user.id,receipt.id);
         }
         const completion = await one(db,
