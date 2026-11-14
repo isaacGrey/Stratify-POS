@@ -22,6 +22,7 @@
 
 **This update covers verified code, not full acceptance of the 18-section commercial proposal.** See [DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md) for the full outstanding list and acceptance gates.
 
+- **025:** persistent online held/parked POS drafts, scope-protected resume/cancel, idempotent requests, final server-side pricing and atomic checkout completion. Held drafts do not reserve stock or tables; abandoned-draft cleanup and concurrent-device UI testing remain.
 - **021:** cash register ledger/open-close/variance, authorized cash refunds, purchase orders and partial goods receipts with backend branch checks, RLS, append-only records and idempotency.
 - **022:** immutable checkout component cost snapshots and COGS estimates. Reports mark estimated gross profit unavailable for mixed historic sales without original costs.
 - **023–024:** product types, brands, SKU/barcodes for products and variations, direct physical-stock links and cross-catalog tenant-unique identifier registry. POS barcode/SKU search is scanner keyboard-wedge compatible.
