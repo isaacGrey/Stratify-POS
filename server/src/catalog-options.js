@@ -115,22 +115,43 @@ export async function saveVariations(db, tenant, product, variations) {
         if (!name || name.length > 120 || !Number.isInteger(delta) || Math.abs(delta) > 100000000 ||
             !Number.isInteger(price) || price < 0 || price > 100000000 ||
             (variation.id && (!uuid.test(variation.id) || kept.has(variation.id)))) {
-            throw badRequest('Invalid or duplicate size');
+            throw badRequest('Invalid or duplicate variation');
+        }
+        const previous = variation.id ? await one(db,
+            'SELECT sku,barcode,stock_item_id FROM variations WHERE tenant_id=$1 AND product_id=$2 AND id=$3',
+            [tenant,product.id,variation.id]) : null;
+        if (variation.id && !previous) throw badRequest('Variation does not belong to this product');
+        const sku = variation.sku === undefined
+            ? previous?.sku || automaticSku('V')
+            : identifier(variation.sku,'variation SKU') || previous?.sku || automaticSku('V');
+        const barcode = variation.barcode === undefined ? previous?.barcode ?? null
+            : identifier(variation.barcode,'variation barcode',128);
+        const stockItem = variation.stock_item_id === undefined ? previous?.stock_item_id ?? null
+            : variation.stock_item_id || null;
+        if (stockItem && (product.product_type !== 'physical' || !uuid.test(stockItem) ||
+            !await one(db,'SELECT id FROM ingredients WHERE tenant_id=$1 AND id=$2',[tenant,stockItem]))) {
+            throw badRequest('Direct variation stock is only available for physical products');
         }
         const useRecipe = variation.use_custom_recipe === true;
-        const values = [tenant, product.id, name, absolute === null ? delta : absolute - product.price_cents,
-            absolute, useRecipe];
-        const saved = variation.id
-            ? await one(db, `UPDATE variations SET name=$3, price_delta_cents=$4, price_cents=$5, use_custom_recipe=$6
-                WHERE tenant_id=$1 AND product_id=$2 AND id=$7 RETURNING id`, [...values, variation.id])
-            : await one(db, `INSERT INTO variations (tenant_id,product_id,name,price_delta_cents,price_cents,use_custom_recipe)
-                VALUES($1,$2,$3,$4,$5,$6) RETURNING id`, values);
-        if (!saved) throw badRequest('Size does not belong to this product');
+        const values = [tenant, product.id, name,
+            absolute === null ? delta : absolute - product.price_cents,
+            absolute, useRecipe, sku, barcode, stockItem];
+        let saved;
+        try {
+            saved = variation.id
+                ? await one(db, 'UPDATE variations SET name=$3,price_delta_cents=$4,price_cents=$5,' +
+                    'use_custom_recipe=$6,sku=$7,barcode=$8,stock_item_id=$9 ' +
+                    'WHERE tenant_id=$1 AND product_id=$2 AND id=$10 RETURNING id',
+                    [...values,variation.id])
+                : await one(db, 'INSERT INTO variations ' +
+                    '(tenant_id,product_id,name,price_delta_cents,price_cents,use_custom_recipe,sku,barcode,stock_item_id) ' +
+                    'VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id',values);
+        } catch (error) { throw catalogConflict(error); }
         if (useRecipe && variation.recipe !== undefined) {
-            await replaceRecipe(db, tenant, 'variation', saved.id, variation.recipe);
+            await replaceRecipe(db,tenant,'variation',saved.id,variation.recipe);
         }
         kept.add(saved.id);
     }
     await db.query('DELETE FROM variations WHERE tenant_id=$1 AND product_id=$2 AND NOT (id=ANY($3::uuid[]))',
-        [tenant, product.id, [...kept]]);
+        [tenant,product.id,[...kept]]);
 }
