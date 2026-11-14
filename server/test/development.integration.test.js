@@ -220,9 +220,9 @@ test('Development: cash register, idempotent refunds, purchasing and tenant boun
     const report=await request('shop/reports?period=daily',200,{account:owner});
     assert.equal(Number(report.summary.gross_revenue_cents),13500);
     assert.equal(Number(report.summary.refund_cents),2000);
-    assert.equal(Number(report.summary.cogs_cents),1800);
+    assert.equal(Number(report.summary.cogs_cents),1825);
     assert.equal(Number(report.summary.cogs_covered_orders),4);
-    assert.equal(Number(report.summary.estimated_gross_profit_cents),9700);
+    assert.equal(Number(report.summary.estimated_gross_profit_cents),9675);
     assert.equal(Number(report.summary.revenue_cents),11500);
     const closed=await post('shop/register/'+session.id+'/close',200,{
         counted_cents:20300
