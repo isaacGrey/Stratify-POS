@@ -1158,12 +1158,15 @@ app.get('/api/shop/overview', data(async (d, r) => {
             d,
             `SELECT
                 count(*)::int orders,
-                COALESCE(sum(total_cents),0)::bigint revenue
+                (COALESCE(sum(total_cents),0)::bigint -
+                 (SELECT COALESCE(sum(f.amount_cents),0)::bigint FROM sales_refunds f
+                  WHERE f.tenant_id=$1
+                    AND (f.created_at AT TIME ZONE $2)::date=(now() AT TIME ZONE $2)::date)) AS revenue
              FROM orders
              WHERE tenant_id=$1
-               AND status='paid'
-               AND created_at::date=current_date`,
-            [r.tenant]
+               AND status IN ('paid','partially_refunded','refunded')
+               AND (created_at AT TIME ZONE $2)::date=(now() AT TIME ZONE $2)::date`,
+            [r.tenant, process.env.REPORT_TIME_ZONE || 'Asia/Manila']
         ),
         one(
             d,
@@ -1185,7 +1188,7 @@ app.get('/api/shop/overview', data(async (d, r) => {
              JOIN orders o
                ON o.id=oi.order_id
               AND o.tenant_id=oi.tenant_id
-             WHERE o.tenant_id=$1 AND o.status='paid'
+             WHERE o.tenant_id=$1 AND o.status IN ('paid','partially_refunded','refunded')
              GROUP BY oi.product_name
              ORDER BY qty DESC
              LIMIT 5`,
