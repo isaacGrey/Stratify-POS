@@ -1,4 +1,4 @@
-export const modules = ['overview','pos','products','inventory','orders','reports','staff','attendance','branches','promotions','settings','billing','audit'];
+export const modules = ['overview','pos','products','inventory','purchasing','orders','reports','staff','attendance','branches','promotions','settings','billing','audit'];
 const defaultModules = {
     owner: modules,
     manager: modules,
@@ -28,7 +28,9 @@ export function canUseRoute(path, method, access, branchIds) {
     const fullWorkspace = branchIds === null;
     switch (resource) {
         case 'checkout':
-        case 'offline': return allow('pos');
+        case 'offline':
+        case 'register': return allow('pos');
+        case 'purchases': return allow('purchasing');
         case 'overview': return allow('overview');
         case 'orders': return allow('orders');
         case 'products':
