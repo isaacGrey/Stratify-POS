@@ -107,7 +107,7 @@ export function registerRegisterRoutes(app, { data, permit, need, fail, audit, i
         const counted = req.body.counted_cents;
         const closed = await one(db,
             "UPDATE register_sessions SET status='closed',counted_cents=$3,expected_cents=$4," +
-            "variance_cents=$3-$4,closed_at=now(),closed_by=$5 WHERE tenant_id=$1 AND id=$2 RETURNING *",
+            "variance_cents=($3::integer - $4::integer),closed_at=now(),closed_by=$5 WHERE tenant_id=$1 AND id=$2 RETURNING *",
             [req.tenant,record.id,counted,expected,req.user.id]);
         await audit(db,req,'register.closed',{id:record.id,expected_cents:expected,
             counted_cents:counted,variance_cents:counted-expected});
