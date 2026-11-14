@@ -73,6 +73,7 @@ CREATE TABLE purchase_order_lines (
 CREATE TABLE purchase_receipts (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL REFERENCES tenants(id),
  purchase_order_id uuid NOT NULL, branch_id uuid NOT NULL, request_id uuid NOT NULL,
+ request_fingerprint text NOT NULL,
  actor_id uuid NOT NULL REFERENCES users(id), received_at timestamptz NOT NULL DEFAULT now(),
  UNIQUE(tenant_id,id), UNIQUE(tenant_id,request_id),
  FOREIGN KEY(tenant_id,purchase_order_id) REFERENCES purchase_orders(tenant_id,id),
