@@ -1,0 +1,69 @@
+name: StratifyPOS Development validation
+
+on:
+  push:
+    branches: [Development]
+  pull_request:
+    branches: [Development]
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    name: Server / PostgreSQL integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: stratify_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d stratify_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: server
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/stratify_test
+      STRATIFYPOS_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/stratify_test
+      JWT_SECRET: CI-only-test-secret-that-is-not-used-in-production-123456
+      SUPERADMIN_EMAIL: development-validation@example.invalid
+      SUPERADMIN_PASSWORD: CI-test-password-only-not-used-in-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      - name: Syntax check source
+        run: find src -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: Apply migrations on isolated PostgreSQL 18
+        run: npm run migrate
+      - name: Run integration tests
+        run: node --test test/checkout.integration.test.js test/development.integration.test.js
+
+  client:
+    name: TypeScript / production build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
