@@ -1,7 +1,56 @@
+import { randomUUID } from 'node:crypto';
 import { one, rows } from './db.js';
 
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const badRequest = message => Object.assign(new Error(message), { status: 400 });
+
+const catalogKinds = ['physical','service','food_beverage','bundle','non_stock'];
+const automaticSku = prefix => prefix + '-' + randomUUID().replace(/-/g,'').slice(0,12).toUpperCase();
+
+export function identifier(value,label,max=64) {
+    if (value === null || value === undefined || value === '') return null;
+    if (typeof value !== 'string') throw badRequest('Invalid '+label);
+    const normalized=value.trim().toUpperCase();
+    if (!normalized) return null;
+    if (normalized.length>max || !/^[A-Z0-9][A-Z0-9_.\/-]*$/.test(normalized)) {
+        throw badRequest('Invalid '+label+': use letters, numbers, hyphens, dots or slashes');
+    }
+    return normalized;
+}
+
+function stringField(value,label,max) {
+    if (typeof value !== 'string' || value.trim().length > max) throw badRequest('Invalid '+label);
+    return value.trim();
+}
+
+export async function productOptions(db,tenant,input,existing=null) {
+    const type = input.product_type ?? existing?.product_type ?? 'food_beverage';
+    if (!catalogKinds.includes(type)) throw badRequest('Invalid product type');
+    const sku = input.sku === undefined
+        ? existing?.sku || automaticSku('P')
+        : identifier(input.sku,'SKU') || existing?.sku || automaticSku('P');
+    const barcode = input.barcode === undefined
+        ? existing?.barcode ?? null : identifier(input.barcode,'barcode',128);
+    const brand = stringField(input.brand ?? existing?.brand ?? '', 'brand', 120);
+    const manufacturer = stringField(input.manufacturer ?? existing?.manufacturer ?? '', 'manufacturer',120);
+    const stockItem = input.stock_item_id === undefined
+        ? existing?.stock_item_id ?? null : input.stock_item_id || null;
+    if (stockItem && (!uuid.test(stockItem) ||
+        !await one(db,'SELECT id FROM ingredients WHERE tenant_id=$1 AND id=$2',[tenant,stockItem]))) {
+        throw badRequest('Select a valid stock item');
+    }
+    if (stockItem && type !== 'physical') throw badRequest('Direct stock tracking is for physical products');
+    const image = input.image_url === undefined ? existing?.image_url ?? null : input.image_url || null;
+    if (image !== null && (typeof image !== 'string' || image.length > 1024 ||
+        !/^https:\/\/[A-Za-z0-9.-]+(?::\d+)?(?:[/?#][^\s]*)?$/.test(image))) {
+        throw badRequest('Product image must be a valid HTTPS URL');
+    }
+    return {product_type:type,sku,barcode,brand,manufacturer,stock_item_id:stockItem,image_url:image};
+}
+
+export const catalogConflict = error => error?.code === '23505'
+    ? Object.assign(new Error('SKU or barcode is already assigned in this business'), {status:409})
+    : error;
 
 export async function listProducts(db, tenant) {
     return rows(db, `
