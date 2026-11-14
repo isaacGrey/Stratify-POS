@@ -74,6 +74,8 @@ export async function loadReport(db, tenant, filters, exporting, branchLimited =
     const limit = exporting ? MAX_EXPORT_ROWS : 50;
     const [summary, daily, top, cashiers, discounts, balances, transactions, movements] = [
         await one(db, `SELECT COUNT(*)::int AS orders, COALESCE(sum(total_cents),0) AS revenue_cents,
+            COALESCE(sum(estimated_cogs_cents),0)::bigint AS cogs_cents,
+            count(estimated_cogs_cents)::int AS cogs_covered_orders,
             COALESCE(sum(discount_cents),0) AS discount_cents, COALESCE(sum(tax_cents),0) AS tax_cents,
             COALESCE(sum(service_cents),0) AS service_cents,
             (SELECT COALESCE(sum(amount_cents),0) FROM expenses e WHERE e.tenant_id=$1
@@ -132,6 +134,16 @@ export async function loadReport(db, tenant, filters, exporting, branchLimited =
     summary.gross_revenue_cents = summary.revenue_cents;
     summary.refund_cents = refundTotals.refund_cents;
     summary.revenue_cents = String(BigInt(summary.gross_revenue_cents) - BigInt(summary.refund_cents));
+    summary.gross_sales_ex_tax_cents = String(
+        BigInt(summary.gross_revenue_cents) - BigInt(summary.tax_cents) - BigInt(summary.service_cents)
+    );
+    // Cost estimates are intentionally unavailable when even one historic sale
+    // lacks its original cost snapshot. Never invent legacy COGS.
+    summary.estimated_gross_profit_cents = summary.orders > 0 &&
+        Number(summary.cogs_covered_orders) === Number(summary.orders)
+        ? String(BigInt(summary.gross_sales_ex_tax_cents) -
+            BigInt(summary.refund_cents) - BigInt(summary.cogs_cents))
+        : null;
     return { filters, counts, summary, daily, top, cashiers, discounts, balances, transactions, movements,
         expenses_cents: summary.expenses_cents };
 }
