@@ -27,6 +27,14 @@ export function reportFilters(query) {
     let to = today;
     switch (period) {
         case 'daily': from = today; break;
+        case 'yesterday':
+            from = to = asDate(new Date(Date.parse(today) - 86400000));
+            break;
+        case 'weekly': {
+            const weekday = new Date(today + 'T00:00:00Z').getUTCDay();
+            from = asDate(new Date(Date.parse(today) - ((weekday + 6) % 7) * 86400000));
+            break;
+        }
         case 'monthly': from = today.slice(0, 7) + '-01'; break;
         case 'yearly': from = today.slice(0, 4) + '-01-01'; break;
         case 'rolling': {
@@ -54,7 +62,7 @@ export async function loadReport(db, tenant, filters, exporting, branchLimited =
         AND ${alias}.created_at >= ($2::date::timestamp AT TIME ZONE $4)
         AND ${alias}.created_at < (($3::date+1)::timestamp AT TIME ZONE $4)
     `;
-    const paid = window('o') + " AND o.status='paid'";
+    const paid = window('o') + " AND o.status IN ('paid','partially_refunded','refunded')";
     const counts = await one(db, `
         SELECT
             (SELECT count(*)::int FROM orders o WHERE ${window('o')}) AS transactions,
@@ -71,9 +79,16 @@ export async function loadReport(db, tenant, filters, exporting, branchLimited =
             (SELECT COALESCE(sum(amount_cents),0) FROM expenses e WHERE e.tenant_id=$1
              AND e.spent_on BETWEEN $2::date AND $3::date AND ($5::uuid IS NULL OR e.branch_id=$5)) AS expenses_cents
             FROM orders o WHERE ${paid}`, args),
-        await rows(db, `SELECT to_char(o.created_at AT TIME ZONE $4, $6) AS day,
-            count(*)::int AS orders, sum(o.total_cents) AS revenue
-            FROM orders o WHERE ${paid} GROUP BY 1 ORDER BY 1`,
+        await rows(db, `SELECT day, sum(orders)::int AS orders, sum(revenue)::bigint AS revenue
+            FROM (
+                SELECT to_char(o.created_at AT TIME ZONE $4,$6) AS day,
+                    count(*)::int AS orders, sum(o.total_cents)::bigint AS revenue
+                FROM orders o WHERE ${paid} GROUP BY 1
+                UNION ALL
+                SELECT to_char(f.created_at AT TIME ZONE $4,$6) AS day,
+                    0::int AS orders, -sum(f.amount_cents)::bigint AS revenue
+                FROM sales_refunds f WHERE ${window('f')} GROUP BY 1
+            ) daily_activity GROUP BY day ORDER BY day`,
         [...args, filters.period === 'yearly' ? 'YYYY-MM' : 'YYYY-MM-DD']),
         await rows(db, `SELECT oi.product_name AS name, oi.variation_name AS variation,
             sum(oi.quantity)::bigint AS units, sum(oi.total_cents)::bigint AS sales
@@ -108,6 +123,15 @@ export async function loadReport(db, tenant, filters, exporting, branchLimited =
             ORDER BY m.created_at DESC, m.id DESC LIMIT $6 OFFSET $7`,
         [...args, limit, exporting ? 0 : movementPage * limit])
     ];
+    // Refunds are reported on the day cash was returned, even when the original
+    // purchase belongs to a previous reporting period. Product/cashier rankings
+    // remain original sales figures until item-level returns are available.
+    const refundTotals = await one(db,
+        `SELECT COALESCE(sum(f.amount_cents),0)::bigint AS refund_cents
+         FROM sales_refunds f WHERE ${window('f')}`, args);
+    summary.gross_revenue_cents = summary.revenue_cents;
+    summary.refund_cents = refundTotals.refund_cents;
+    summary.revenue_cents = String(BigInt(summary.gross_revenue_cents) - BigInt(summary.refund_cents));
     return { filters, counts, summary, daily, top, cashiers, discounts, balances, transactions, movements,
         expenses_cents: summary.expenses_cents };
 }
