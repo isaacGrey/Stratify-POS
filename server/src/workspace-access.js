@@ -29,7 +29,8 @@ export function canUseRoute(path, method, access, branchIds) {
     switch (resource) {
         case 'checkout':
         case 'offline':
-        case 'register': return allow('pos');
+        case 'register':
+        case 'holds': return allow('pos');
         case 'purchases': return allow('purchasing');
         case 'overview': return allow('overview');
         case 'orders': return allow('orders');
