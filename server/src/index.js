@@ -19,6 +19,9 @@ import { inTransaction, planId, platformAudit, priceSubscription, provisionBusin
 import { pool, scoped, rows, one } from './db.js';
 import { listProducts, saveVariations, replaceRecipe } from './catalog-options.js';
 import { changeStock, inventoryQuantity, listBalances, recordMovement, transferStock } from './inventory.js';
+import { registerRegisterRoutes } from './register-routes.js';
+import { registerPurchasingRoutes } from './purchasing-routes.js';
+import { registerRefundRoutes } from './refund-routes.js';
 import { loadReport, reportFilters } from './reports.js';
 import { attendanceHistory, attendanceStatus, attendanceSummary, recordAttendance } from './attendance.js';
 import { branchSchedule, saveBranchSchedule } from './branch-operations.js';
@@ -2475,6 +2478,12 @@ app.put('/api/shop/staff/:id/schedule', permit('owner', 'manager'), data(async (
     return { ok: true };
 }));
 
+// PHASE 2: operational routes inherit membership, module access and scoped RLS.
+const operational = { data, permit, need, fail, audit, ident, money, stockMode };
+registerRegisterRoutes(app, operational);
+registerPurchasingRoutes(app, operational);
+registerRefundRoutes(app, operational);
+
 // POS CHECKOUT
 
 const checkout = quote => data(async (d, r) => {
@@ -2503,7 +2512,7 @@ const checkout = quote => data(async (d, r) => {
             'Invalid order type/payment'
         );
 
-        const { client_sale_id, offline, expected } = r.body;
+        const { client_sale_id, offline, expected, register_session_id = null } = r.body;
         const supervisorReplay = r.params.originalCashier !== undefined;
         const cashierId = r.params.originalCashier || r.user.id;
         if (supervisorReplay) need(ident(cashierId) && offline, 'A signed offline sale is required');
@@ -2710,12 +2719,29 @@ const checkout = quote => data(async (d, r) => {
             throw fail(409, 'Checkout totals changed. Review current prices and discounts.');
         }
 
+        let cashRegister = null;
         if (payment_method === 'cash') {
             need(
                 money(amount_tendered_cents) &&
                 amount_tendered_cents >= total,
                 'Cash tendered is insufficient'
             );
+            need(!register_session_id || ident(register_session_id), 'Invalid register session');
+            if (grant && register_session_id) throw fail(409, 'Offline sales require separate cash reconciliation');
+            if (!grant && settings.require_cash_register && !register_session_id) {
+                throw fail(409, 'Open a cashier register before receiving cash');
+            }
+            if (register_session_id) {
+                cashRegister = await one(d,
+                    'SELECT * FROM register_sessions WHERE tenant_id=$1 AND id=$2 FOR UPDATE',
+                    [r.tenant, register_session_id]);
+                if (!cashRegister || cashRegister.status !== 'open' ||
+                    cashRegister.cashier_id !== r.user.id || cashRegister.branch_id !== branch_id) {
+                    throw fail(409, 'Cash register must be open and assigned to you in this branch');
+                }
+            }
+        } else {
+            need(!register_session_id, 'Only cash sales may use a cash register');
         }
 
         for (const [id, qty] of sortedConsumption) {
@@ -2729,11 +2755,11 @@ const checkout = quote => data(async (d, r) => {
                 subtotal_cents,discount_cents,tax_cents,service_cents,
                 total_cents,payment_method,amount_tendered_cents,
                 change_cents,promo_code,client_sale_id,checkout_fingerprint,offline_device_id,
-                created_at,synced_at,receipt_footer,promotion_id,loyalty_account_id
+                created_at,synced_at,receipt_footer,promotion_id,loyalty_account_id,register_session_id
              )
              VALUES
              ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-              COALESCE($18::timestamptz, now()), CASE WHEN $17::uuid IS NOT NULL THEN now() END,$19,$20,$21)
+              COALESCE($18::timestamptz, now()), CASE WHEN $17::uuid IS NOT NULL THEN now() END,$19,$20,$21,$22)
              RETURNING *`,
             [
                 r.tenant,
@@ -2752,7 +2778,8 @@ const checkout = quote => data(async (d, r) => {
                     ? amount_tendered_cents - total
                     : 0,
                 promotion.code, client_sale_id ?? null, fingerprint, offline?.device_id ?? null,
-                offline?.created_at ?? null, grant?.receiptFooter ?? settings.receipt_footer, promotion.id, loyalty?.id ?? null
+                offline?.created_at ?? null, grant?.receiptFooter ?? settings.receipt_footer, promotion.id, loyalty?.id ?? null,
+                cashRegister?.id ?? null
             ]
         );
 
@@ -2783,6 +2810,12 @@ const checkout = quote => data(async (d, r) => {
             await recordMovement(d, r.tenant, id, branch_id, -qty, 'sale', 'order', r.user.id, order.id);
         }
 
+        if (cashRegister) {
+            await d.query(
+                'INSERT INTO register_movements(tenant_id,branch_id,session_id,actor_id,kind,amount_cents,reason,reference_id) ' +
+                "VALUES($1,$2,$3,$4,'sale',$5,'POS checkout',$6)",
+                [r.tenant,branch_id,cashRegister.id,r.user.id,total,order.id]);
+        }
         await recordLoyalty(d, r.tenant, loyalty?.id, order.id,
             loyalty ? Math.floor(taxable / settings.loyalty_cents_per_point) : 0, promotion.points || 0);
 
