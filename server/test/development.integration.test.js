@@ -132,6 +132,7 @@ test('Development: cash register, idempotent refunds, purchasing and tenant boun
     assert.equal(Number(items.find(item=>item.id===stock.id).quantity),58);
     const movements=await request('shop/stock/movements',200,{account:owner});
     assert.equal(movements.filter(item=>item.reference_id===receipt1.id).length,1);
+    assert.equal(movements.find(item=>item.reference_id===receipt1.id).branch_id,null);
     assert.equal(movements.filter(item=>item.reference_id===receipt2.id).length,1);
     await request('shop/purchases/'+po.id,404,{account:outsider});
     await request('shop/purchases',403,{account:outsider,tenant:owner.shop.id});
@@ -179,18 +180,55 @@ test('Development: cash register, idempotent refunds, purchasing and tenant boun
     assert.equal(Number(finalInventory.find(item=>item.id===spareA.id).quantity),1);
     assert.equal(Number(finalInventory.find(item=>item.id===spareB.id).quantity),2);
 
+    const cancelledDraft={
+        id:randomUUID(),branch_id:branch.id,order_type:'takeout',
+        items:[{product_id:product.id,quantity:1}]
+    };
+    const draft=await post('shop/holds',200,cancelledDraft,owner);
+    assert.equal(draft.status,'held');
+    assert.equal((await post('shop/holds',200,cancelledDraft,owner)).id,draft.id);
+    await post('shop/holds',409,{...cancelledDraft,
+        items:[{product_id:product.id,quantity:2}]},owner);
+    await request('shop/holds/'+draft.id,404,{account:outsider});
+    assert.equal((await post('shop/holds/'+draft.id+'/cancel',200,{},owner)).status,'cancelled');
+    assert.equal((await post('shop/holds/'+draft.id+'/cancel',200,{},owner)).status,'cancelled');
+    await post('shop/checkout',409,{
+        branch_id:branch.id,client_sale_id:randomUUID(),held_order_id:draft.id,
+        payment_method:'cash',register_session_id:session.id,
+        amount_tendered_cents:1000,
+        items:[{product_id:product.id,quantity:1}]
+    },owner);
+    const savedDraft={...cancelledDraft,id:randomUUID()};
+    await post('shop/holds',200,savedDraft,owner);
+    assert.equal((await request('shop/holds?branch_id='+branch.id,200,{account:owner}))
+        .some(row=>row.id===savedDraft.id),true);
+    const resumedCheckout={
+        branch_id:branch.id,client_sale_id:randomUUID(),
+        held_order_id:savedDraft.id,payment_method:'cash',
+        register_session_id:session.id,amount_tendered_cents:1000,
+        items:[{product_id:product.id,quantity:1}]
+    };
+    const paidHold=await post('shop/checkout',200,resumedCheckout,owner);
+    assert.equal(Number(paidHold.total_cents),1000);
+    assert.equal((await post('shop/checkout',200,resumedCheckout,owner)).id,paidHold.id);
+    assert.equal((await request('shop/holds/'+savedDraft.id,200,{account:owner})).status,'completed');
+    await post('shop/checkout',409,{
+        ...resumedCheckout,client_sale_id:randomUUID()
+    },owner);
+    assert.equal((await request('shop/holds?branch_id='+branch.id,200,{account:owner})).length,0);
+
     const report=await request('shop/reports?period=daily',200,{account:owner});
-    assert.equal(Number(report.summary.gross_revenue_cents),12500);
+    assert.equal(Number(report.summary.gross_revenue_cents),13500);
     assert.equal(Number(report.summary.refund_cents),2000);
-    assert.equal(Number(report.summary.cogs_cents),1700);
-    assert.equal(Number(report.summary.cogs_covered_orders),3);
-    assert.equal(Number(report.summary.estimated_gross_profit_cents),8800);
-    assert.equal(Number(report.summary.revenue_cents),10500);
+    assert.equal(Number(report.summary.cogs_cents),1800);
+    assert.equal(Number(report.summary.cogs_covered_orders),4);
+    assert.equal(Number(report.summary.estimated_gross_profit_cents),9700);
+    assert.equal(Number(report.summary.revenue_cents),11500);
     const closed=await post('shop/register/'+session.id+'/close',200,{
-        counted_cents:19300
+        counted_cents:20300
     },owner);
     assert.equal(closed.status,'closed');
-    assert.equal(closed.expected_cents,19500);
+    assert.equal(closed.expected_cents,20500);
     assert.equal(closed.variance_cents,-200);
     await post('shop/register/'+session.id+'/movements',409,{
         kind:'cash_in',amount_cents:200,reason:'Late cash deposit'
