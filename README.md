@@ -1,121 +1,103 @@
-# Crema — React TypeScript Coffee Shop SaaS POS
+# StratifyPOS
 
-A full-stack **development foundation** for a coffee-shop SaaS: React 19 + TypeScript/TSX + Vite frontend, Express/Node API, and PostgreSQL with tenant-scoped row-level security (RLS).
+**Development branch: enhanced multi-industry POS and business management platform.**
 
-## Included live (database-backed) workflows
+> **Status: ACTIVE DEVELOPMENT — NOT CERTIFIED OR CLEARED FOR LIVE COMMERCIAL POS USE.**
+> This repository contains working, database-backed workflows, not a complete
+> payment gateway, fiscal invoicing product, or formally audited production system.
 
-- Register a new tenant/shop and its owner; login; forgot/reset password (SMTP required); invite employee by one-use link; role gates (owner, manager, cashier, staff); superadmin account.
-- Subscription records with Free, Basic and Premium plan definitions, 14-day paid-tier trials, limits on branches and staff, expiration checks before checkout; admin can change subscription state.
-- Shop dashboards, categories, products, variations, add-ons, ingredients, recipe-based ingredient deduction, suppliers, branch/table records, promo codes, expenses, attendance, audit records and analytics.
-- POS: dine-in/takeout/delivery, server-priced cart, cash change, promo discounts, configurable tax/service charge and browser-printable receipt.
-- Inventory adjustments and sales decrements are committed atomically in database transactions; stock cannot go negative.
-- Multi-tenant business tables all carry a `tenant_id`, have RLS policies and are accessed from a transaction with `SET LOCAL`-equivalent `set_config(...,true)`.
+## Stack
 
-## Explicit production gaps / not included
+- **Web client:** React 19, TypeScript, Vite, responsive PWA, Dexie/IndexedDB for supported offline cash checkout.
+- **Backend:** Node.js 20+/22 recommended, Express, PostgreSQL 15+ (CI validates PostgreSQL 18).
+- **Security:** JWT sessions, live membership and permission checks, PostgreSQL tenant RLS with a restricted runtime role, branch restrictions, audited operational actions.
+- **Deployments:** Vite client can be hosted separately; the Node API and PostgreSQL need their own secure hosting. A static frontend-only Vercel deployment is not a complete functional backend.
 
-This is a substantial *runnable source foundation*, **not a certified or fully production-ready payment or accounting platform**. It does **not** integrate with payment gateways, perform actual GCash/Maya/card authorization or capture, bill or collect subscription payments, generate official Philippine BIR-compliant fiscal invoices, implement refunds/payment reconciliation, handle offline POS syncing, branch-specific inventory, provider webhooks, advanced profit calculation, real-time push events, automated backups, monitoring, or a comprehensive automated test suite. These require additional engineering, integration credentials and operational controls. For non-cash methods the sale is **recorded as externally confirmed by the cashier**, not electronically verified. Do not deploy to live cashiers for actual cashless payment processing without building those workflows.
+## Functional scope
 
-## Requirements
+| Module | Current capability | Important limits |
+|---|---|---|
+| POS | Server-calculated carts, recipes, product variations and add-ons, cash/cashless **recording**, signed offline cash sales, idempotent checkout, dine-in/takeout/delivery, printed browser receipt, barcode and SKU search | No cashless provider capture, split tender, item-level split bills or certified fiscal receipts |
+| Catalog | Products, services, menu items, bundles and non-stock types, tenant-unique SKU/barcodes including variants, image HTTPS URLs, recipes and direct physical-stock links | Image **uploads**, price tiers, expiration/serial controls and flexible advanced modifiers remain |
+| Inventory | Stock ledger, nonnegative checks, optional branch balances, transfers, ingredients, recipe and linked-stock deduction | No FIFO, batch/expiry, physical count approval workflow or procurement return |
+| Purchasing | Supplier records, purchase orders, partial receiving, duplicate receiving protection and atomic goods receipt | No supplier invoice matching, payable ledger or supplier-return workflow |
+| Register | Opening cash, cash in/out, online checkout assignment, closure, variance, optional owner-enforced policy | Offline cash is not auto-assigned to a drawer; manual reconciliation is required |
+| Refunds | Supervised partial/full **cash** refunds, immutable ledger and idempotency, linked register payouts | Card, Maya, GCash and bank reversals **not** implemented; no automatic returned-item restocking |
+| Reporting | Date and branch filters, sales/payments/transactions/stock, exports, refund-aware net receipts, cost snapshots and estimated gross profit | Historical orders without cost snapshots are excluded from profit estimates; no audited financial statements |
+| Workforce | Users, roles, branch access, attendance, breaks, shifts and permissions | Full payroll and leave workflows not complete |
+| Locations | Branch records, hours, tables, basic branch stock and permissions | Advanced terminals, reservations and floor-layout designer not complete |
+| Promotions | Promotions, scoped rules, bundles, BOGO and loyalty capabilities | Legally compliant PWD/senior VAT handling needs review |
+| SaaS | Plans, limits, super-admin, plan approvals and manually verified payment evidence | No automatic billing/subscription gateway |
+| Backups | Encrypted backups, retention, restore verification components | Requires off-server storage and recovery operations to be configured and drilled |
 
-Node 20+, PostgreSQL 15+ and npm. The project does not include package-lock files; install using npm. Run migrations with an administrative/migration database account. **For production**, use a separate, minimally privileged database login for the API (not a superuser and not the owner of tables), with only the required grants. RLS does not provide a trustworthy security boundary if the API runs as a superuser or a role with `BYPASSRLS`.
+For a requirement-by-requirement delivery picture, see
+[Development implementation roadmap](docs/DEVELOPMENT_ROADMAP.md).
 
 ## Quick start
 
-1. Create PostgreSQL database `coffeesaas` (e.g., `createdb coffeesaas`).
-2. `cd server && cp .env.example .env` and enter `DATABASE_URL`, a long random `JWT_SECRET` (32+ characters), `CLIENT_URL`, and optionally SMTP. On Windows, copy `.env.example` to `.env` manually or use `Copy-Item`.
-3. In `server`: `npm install`, then `npm run migrate`.
-4. Set `SUPERADMIN_EMAIL` and `SUPERADMIN_PASSWORD` in `.env`; run `npm run seed` to create/update the superadmin user. **Use a unique password** and keep `.env` secret.
-5. In `server`: `npm run dev`.
-6. In `client`: copy `.env.example` to `.env`, then `npm install && npm run dev`.
-7. Open `http://localhost:5173`; register a shop. To sign in as superadmin, first use the seeded credentials.
+1. Install Node.js 22 (or 20+) and PostgreSQL. Create a new **non-production** database.
+2. Copy `server/.env.example` to `server/.env`. Configure `DATABASE_URL`, a strong `JWT_SECRET` (32+ characters), `CLIENT_URL`, and super-admin seed credentials if needed.
+3. From `server`, run:
 
-In a local development setup, `DATABASE_URL` can point to a Postgres migration owner so the schema and functions can be created. For hosted deployment, separate database users and explicitly apply SQL `GRANT` permissions to the API role. The invitation-token resolver is a `SECURITY DEFINER` function; restrict its execute privilege and audit it before deployment.
-
-## Recommended initial workflow
-
-1. Register shop, select plan.
-2. Create `Coffee`, `Pastries`, etc. in Menu & Products.
-3. Add ingredients and restock them through Inventory.
-4. Create products and attach recipes specifying ingredient quantities per unit. Optionally create size variations and add-ons.
-5. Create promotion codes and tables; adjust shop tax/service settings.
-6. Add to cart in POS, choose branch and payment method, submit the sale; the backend verifies pricing and ingredient stock before posting the order and receipt.
-7. View history, reports and the ingredient movement log.
-
-### API overview
-
-- `POST /api/auth/register`, `/api/auth/login`, `/api/auth/forgot`, `/api/auth/reset`, `/api/auth/accept-invite`
-- `GET /api/me`, `GET /api/plans`
-- `/api/shop/overview`, `/api/shop/settings`, `/api/shop/branches`, `/api/shop/categories`, `/api/shop/products`, `/api/shop/addons`, `/api/shop/ingredients`, `/api/shop/stock/adjust`, `/api/shop/stock/movements`, `/api/shop/suppliers`, `/api/shop/tables`, `/api/shop/promotions`, `/api/shop/expenses`, `/api/shop/staff`, `/api/shop/staff/invite`, `/api/shop/attendance`, `/api/shop/checkout`, `/api/shop/orders`, `/api/shop/reports`, `/api/shop/audit`, `/api/shop/subscription`
-- `/api/admin/overview`, `/api/admin/tenants`, `/api/admin/tenants/:id`, `/api/admin/subscriptions/:id`, `/api/admin/plans/:id`
-
-All `/api/shop/*` requests require `Authorization: Bearer <JWT>` and `X-Tenant-Id: <tenant UUID>`. These are validated against live memberships, and RLS applies inside the subsequent DB transaction. Never accept tenant ids from body payloads as authority.
-
-### Role matrix
-
-| Workflow | Owner | Manager | Cashier | Staff |
-|---|---|---|---|---|
-| POS checkout | Yes | Yes | Yes | No |
-| Shop dashboard / own attendance | Yes | Yes | Yes | Yes |
-| Products, stock, reports, settings, branches | Yes | Yes | No | No |
-| Staff invites | Yes | Yes | No | No |
-| Change staff roles | Yes | No | No | No |
-| Subscription plan requests | Yes | No | No | No |
-| Platform tenant administration | Separate seeded superadmin only | No | No | No |
-
-## Security and deployment checklist
-
-- Dedicated HTTPS reverse proxy, secure allowed CORS origin, trusted hosting, and platform secret management.
-- A **non-superuser/non-owner** DB role without `BYPASSRLS`; with least-privilege SQL grants. Verify tenant A cannot see tenant B in integration tests.
-- External secrets manager, connection pooling, rotation of auth/session secrets, refresh sessions, logout revocation and MFA for admins; consider email verification and identity proofing.
-- SMTP with working transactional emails; password reset tests and invite abuse controls. Add CAPTCHA and tighter anti-enumeration/anti-automation measures.
-- Integrate real provider APIs and webhooks for verified payments/refunds and recurring subscriptions; provide idempotency keys, webhook signature checks, reconciliation and dispute handling.
-- Use compliant Philippine receipts/tax configurations for actual merchant circumstances after review with accountant/BIR requirements.
-- Add tests (unit/integration/load/security), audit log retention, backups and restore drills, alerting, secrets scanning, error tracking, deploy pipelines, and data privacy policies.
-- Add inventory per branch and robust ingredient reservation; sellable inventory is presently tracked globally per shop.
-
-## Project structure
-
-```
-client/              React dashboard, POS and auth screens
-server/src/index.js  Express routes and transactional business logic
-server/src/db.js     PostgreSQL pool and tenant-scoped transaction helper
-server/src/migrate.js, seed.js
-server/sql/001_initial.sql    Database schema, RLS and seed plans
-```
-
-This code is provided as-is for local evaluation; a live PostgreSQL integration test and production infrastructure verification have not been performed in this environment.
-
-## React TypeScript conversion (this package)
-
-- Converted `client/src/main.jsx` to `client/src/main.tsx`, preserving the original app screens and backend API routes.
-- Added `client/src/types.ts` for core shop, user, product, cart, receipt, and API type contracts.
-- Added TypeScript and React type dependencies, `client/tsconfig.json`, `client/vite.config.ts`, and `client/src/vite-env.d.ts`.
-- Updated `client/index.html` to load `/src/main.tsx`, plus `npm run typecheck` and a TypeScript-checked `npm run build` script.
-- Existing UI is a large legacy component file; its props and responses remain gradually typed (not a strict full-model migration). `strict` is currently disabled in `tsconfig.json` to preserve compatibility during incremental typing.
-- No `.env` secret files or `node_modules` are shipped. Copy `.env.example` to `.env` separately for the server and client, and set fresh credentials.
-
-### Windows (PowerShell) start
-
-```powershell
-cd server
-Copy-Item .env.example .env
-# Set DATABASE_URL, JWT_SECRET, SUPERADMIN_EMAIL, SUPERADMIN_PASSWORD
-npm install
+```bash
+npm ci
 npm run migrate
 npm run seed
 npm run dev
 ```
 
-Open a second terminal:
+4. Copy `client/.env.example` to `client/.env`, configure the API/public origins, and from `client` run:
 
-```powershell
-cd client
-Copy-Item .env.example .env
-npm install
+```bash
+npm ci
 npm run typecheck
 npm run dev
 ```
 
-Open http://localhost:5173. To create a deployment build from the client folder, run `npm run build`.
+5. Open the Vite development URL (usually `http://localhost:5173`). The workspace lives at `/app`, with public pages at `/`.
 
-**Validation limitation:** This conversion was checked with local TypeScript syntax and a temporary type-checking shim because the execution environment cannot reach npm to install React/Vite type packages. Run `npm install` and `npm run typecheck` in your own environment; further type compatibility adjustments may be necessary. The backend was retained from the uploaded project and its runtime/database behavior was not retested.
+**Database role:** `scoped()` uses `SET LOCAL ROLE coffee_saas_runtime`. In production, the API connection must not be a superuser or have `BYPASSRLS`. Use separate migration and runtime credentials, minimal grants and auditable secrets management.
+
+## Development branch additions
+
+Migrations `021`–`024` add operational ledgers, register reconciliation, purchase receipts, supervised cash refunds, cost snapshots, SKU/barcode registry, and direct physical-stock links. They are applied transactionally by `npm run migrate`. **Back up your database first**, test against a restored copy, and verify rollback/recovery before applying to a deployment with real data.
+
+### Operational usage
+
+- **Open register:** POS → Cash register. The owner may require an open register for online cash checkout. Recorded sales, withdrawals and refunds affect the expected closing balance. Count cash physically before closing.
+- **Purchase stock:** Purchasing & Suppliers → New purchase order → Receive selected stock. Partial receipts, stock changes and movement ledger records commit together. Repeating the same receipt ID cannot add stock twice.
+- **Refund cash sale:** Sales & Transactions → Refund (owner/manager only). This records cash returned and optionally debits the current manager's open register. Manually inspect returned goods and separately authorize any inventory adjustment.
+- **Retail product:** Products & Services → Physical / stock item → Direct stock item (and optional variant-specific stock item). A completed checkout deducts that stock from branch inventory when enabled, otherwise from shared stock.
+- **Scan barcode:** In the POS search field, scan a unique barcode or type an SKU and press Enter. A matched product or variation is added directly to the cart.
+
+Products and variations may reference ingredients through recipes. **Do not link a stock item to a product and its recipe simultaneously**; checkout rejects duplicate use of the same stock ID. Stock costs are captured at checkout using the current stock unit cost or (for non-recipe items) the product cost. These are estimates, not FIFO or a tax-compliant accounting valuation.
+
+## Validation
+
+GitHub Actions workflow `StratifyPOS Development validation` runs on pushes to **Development**:
+- A clean PostgreSQL 18 migration.
+- Node syntax checks.
+- Server integration tests including tenant and branch access, checkout/offline, registers, refunds, purchase receiving, SKU/barcode uniqueness and stock-cost snapshots.
+- Client TypeScript checking and production build.
+
+Run the database tests locally only against a disposable migrated database:
+
+```bash
+cd server
+STRATIFYPOS_TEST_DATABASE_URL="postgresql://..." node --test test/checkout.integration.test.js test/development.integration.test.js
+```
+
+These tests are not a substitute for real printer/scanner compatibility, browser and mobile manual testing, performance/load testing, offline device-loss tests, staging database recovery or a third-party security audit.
+
+## Before commercial rollout
+
+Do not connect live business cashiers or represent receipts as official Philippine tax documents until the following are complete:
+
+1. BIR and VAT/discount requirements reviewed and the appropriate invoicing/compliance workflow implemented.
+2. Actual payment providers, verified payment callbacks, electronic refunds and reconciliation added.
+3. Offline recovery and device security threat model completed, including lost/stolen device handling, local sales data and signed grant security.
+4. Backup key management, off-server copies, restoration drills, monitoring, security tests, audit retention, privacy/deletion workflows and incident response deployed.
+5. Hardware testing of printers, drawers and barcode scanners; real-world multi-branch and multi-cashier pilot.
+6. Remaining modules and edge-case tests documented in the roadmap completed.
+
+The POS is built incrementally; business-critical changes should remain on `Development` until verified. **The default `main` branch is not changed by this implementation.**
