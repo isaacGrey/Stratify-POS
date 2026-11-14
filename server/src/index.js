@@ -2487,6 +2487,9 @@ registerRegisterRoutes(app, operational);
 registerPurchasingRoutes(app, operational);
 registerRefundRoutes(app, operational);
 
+// Transaction cost snapshots are manager/report data, not cashier receipt data.
+const publicOrder = ({ estimated_cogs_cents, ...order }) => order;
+
 // POS CHECKOUT
 
 const checkout = quote => data(async (d, r) => {
@@ -2537,7 +2540,7 @@ const checkout = quote => data(async (d, r) => {
                 const savedItems = await rows(d,
                     'SELECT product_name AS name, variation_name AS variation, addons, quantity, total_cents FROM order_items WHERE tenant_id=$1 AND order_id=$2 ORDER BY line_position, id',
                     [r.tenant, existing.id]);
-                return { ...existing, items: savedItems };
+                return { ...publicOrder(existing), items: savedItems };
             }
         }
 
@@ -2868,7 +2871,7 @@ const checkout = quote => data(async (d, r) => {
         });
 
         return {
-            ...order,
+            ...publicOrder(order),
             items: lines.map(x => ({
                 name: x.product.name,
                 variation: x.variant?.name,
@@ -2885,8 +2888,8 @@ app.post('/api/shop/checkout', permit('owner', 'manager', 'cashier'), checkout(f
 
 // TRANSACTIONS
 
-app.get('/api/shop/orders', data((d, r) =>
-    rows(
+app.get('/api/shop/orders', data(async (d, r) =>
+    (await rows(
         d,
         `SELECT o.*,u.name cashier,b.name branch
          FROM orders o
@@ -2897,7 +2900,7 @@ app.get('/api/shop/orders', data((d, r) =>
          ORDER BY o.created_at DESC
          LIMIT 300`,
         [r.tenant]
-    )
+    )).map(publicOrder)
 ));
 
 app.get('/api/shop/orders/:id', data(async (d, r) => {
@@ -2918,7 +2921,7 @@ app.get('/api/shop/orders/:id', data(async (d, r) => {
         [r.params.id, r.tenant]
     );
 
-    return order;
+    return publicOrder(order);
 }));
 
 // SALES REPORTS
