@@ -17,7 +17,7 @@ A passing build/integration suite is not a certification or authorization to ope
 | Proposal area | Current state | Most important outstanding work |
 |---|---|---|
 | 2 Dashboard | Partial | Today/yesterday/weekly/custom dashboard filters, live refresh, branch consolidation, revenue/COGS comparisons, widgets, alerts, employee ranking and refund activity |
-| 3 POS | Partial / core CI | Mixed/split tender and billing, hold/park/resume, refunds/exchanges from item lines, cashier-specific terminal assignment, queue/KDS, customer links, supported hardware, official invoice rendering |
+| 3 POS | Partial / core CI | Mixed/split tender and billing, multi-terminal held-order editing, refunds/exchanges from item lines, cashier-specific terminal assignment, queue/KDS, customer links, supported hardware, official invoice rendering |
 | 4 Products & Services | Partial / identifiers and stock CI | Real image upload, flexible modifier groups, stock-aware variants, UOM pricing, price tiers, CSV/Excel bulk import, serial/warranty, change history and bundled BOM quantities |
 | 5 Inventory | Partial / atomic stock CI | Physical counts/cycle counts, batches/expiry, FIFO or weighted-average costing, supplier returns, transfer approvals, robust offline inventory reconciliation, shrinkage and aging |
 | 6 Sales & Transactions | Partial / cash refunds CI | Partial item returns, exchanges, void authorization, payment settlement, credit/deposit balances, official invoices and customer digital receipts |
@@ -42,6 +42,12 @@ A passing build/integration suite is not a certification or authorization to ope
 - Authorized cash-only refunds with exact idempotent request IDs; payment provider reversals explicitly rejected until verified.
 - Partial purchasing receipts, branch-aware stock changes, movement ledger and cost updates in one database transaction.
 
+### Held-order increment — CI validated
+
+- Migration `025_parked_orders.sql` adds tenant- and branch-scoped held-order drafts. Cashiers can manage their own held orders, while managers and owners can manage branch drafts.
+- POS routes support idempotent creation, viewing and cancellation. Completing a held order happens atomically inside final checkout; inventory and prices are not reserved while a draft is held.
+- The compact POS allows Hold / park order, Resume, Cancel and refreshing the list. Tests exercise replay, cancel, branch/tenant security and finalization.
+
 ### Product and cost increment — CI validated
 
 - Migrations `022`–`024`: immutable checkout cost components, COGS snapshots, product types, direct stock links, tenant-unique SKU and barcode registry across products and variations.
@@ -51,7 +57,7 @@ A passing build/integration suite is not a certification or authorization to ope
 
 ### Regression tests — CI validated
 
-`server/test/development.integration.test.js` exercises register open/close and variance, idempotent sales/refunds/receipts, partial refunds, partial receiving, over-receipt rejection, RLS isolation, catalog identifier uniqueness, direct physical inventory and cost snapshots.
+`server/test/development.integration.test.js` exercises register open/close and variance, idempotent sales/refunds/receipts, held-order completion/cancellation, partial refunds, partial receiving, over-receipt rejection, RLS isolation, catalog identifier uniqueness, direct physical inventory and cost snapshots.
 
 The existing `server/test/checkout.integration.test.js` continues to cover offline signatures/replay, stock, branch permissions, billing and recovery components.
 
@@ -60,7 +66,7 @@ The existing `server/test/checkout.integration.test.js` continues to cover offli
 ### Phase 1: Transaction integrity and offline release gate — CRITICAL
 
 1. **Split/mixed tender**: immutable payment allocations; backend total must equal order total; prevent duplicate provider references; receipts show allocations; settlement integration separate from unverified payment recording.
-2. **Hold/park/resume**: persistent branch/cashier-scoped drafts, draft version checks, final server-side price recalculation, one-time completion and abandoned draft cleanup.
+2. **Hold/park/resume hardening**: durable branch/cashier-scoped drafts, one-time completion and checkout price recalculation are implemented. Still add draft versioning/edits, abandoned-draft cleanup and multi-terminal handoff tests.
 3. **Offline hardening**: device binding/revocation, sync conflict UI, stock reconciliation, local retention policy, lost-device security, data encryption design, DST/timezone and multi-tab stress testing.
 4. **Register reconciliation**: offline cash session assignment and post-sync variance policy; fail-closed terminal/device controls.
 
