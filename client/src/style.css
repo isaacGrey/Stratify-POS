@@ -5101,3 +5101,11 @@ td strong,.metric>strong,.product-name,.cart-head h2,.total-row strong {color:va
   .operations-variation-row input:nth-child(4) { grid-column:span 1; }
   .operations-variation-row button { grid-column:3; grid-row:1; }
 }
+
+.operations-held-list { display:grid; gap:8px; margin:8px 0; }
+.operations-held-row { display:flex; align-items:center; flex-wrap:wrap; gap:9px; padding:8px 0;
+  border-bottom:1px solid var(--border,#e2e8f0); }
+.operations-held-row > span { display:flex; flex-direction:column; min-width:140px; flex:1; }
+.operations-held-row > span strong { font-size:12px; }
+.operations-held-row > span small { color:#64748b; font-size:11px; margin-top:2px; }
+.operations-held-row .btn { min-height:32px; padding:6px 12px; }
