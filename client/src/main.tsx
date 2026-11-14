@@ -2157,7 +2157,9 @@ function RecipeEditor({ value, ingredients, onChange }) {
     </>;
 }
 
-const emptyProduct = { name: '', description: '', price: '', cost: '', category_id: '', active: true, variations: [], recipe: [] };
+const emptyProduct = { name: '', description: '', price: '', cost: '', category_id: '', active: true,
+    product_type:'food_beverage',sku:'',barcode:'',brand:'',manufacturer:'',stock_item_id:'',image_url:'',
+    variations: [], recipe: [] };
 
 function Products({ request, act, busy }) {
     const { data, load, err } = useLoad(request, 'products');
@@ -2189,8 +2191,14 @@ function Products({ request, act, busy }) {
             await request(modal?.id ? 'products/' + modal.id : 'products', modal?.id ? 'PUT' : 'POST', {
                 name: form.name, description: form.description, price_cents: pesos(form.price), cost_cents: pesos(form.cost),
                 category_id: form.category_id || null, active: form.active,
+                product_type:form.product_type,sku:form.sku||null,barcode:form.barcode||null,
+                brand:form.brand||'',manufacturer:form.manufacturer||'',
+                stock_item_id:form.product_type==='physical' ? form.stock_item_id||null : null,
+                image_url:form.image_url||null,
                 variations: form.variations.map(option => ({
                     id: option.id, name: option.name, price_cents: pesos(option.price),
+                    sku:option.sku||null,barcode:option.barcode||null,
+                    stock_item_id:form.product_type==='physical' ? option.stock_item_id||null : null,
                     use_custom_recipe: option.use_custom_recipe === true, recipe: option.recipe
                 })),
                 recipe: form.recipe
@@ -2206,7 +2214,10 @@ function Products({ request, act, busy }) {
         <Heading title="Products & services" action={<Button onClick={() => open()}><Plus size={17} /> Add product</Button>} />
         <Panel title="Product catalog" right={<span className="badge">{data.length} items</span>}>
             <Table items={data} columns={[
-                ['name', 'Product'], ['category', 'Category'], ['price_cents', 'Base price', money],
+                ['name', 'Product', (_name,item)=><div className="operations-product-cell">
+                    {item.image_url && <img src={item.image_url} alt="" loading="lazy" />}
+                    <span><strong>{item.name}</strong><small>{item.sku || 'No SKU'}{item.barcode ? ' · '+item.barcode : ''}</small></span>
+                </div>], ['category', 'Category'], ['product_type','Type',v=>String(v).replace('_',' ')], ['price_cents', 'Base price', money],
                 ['active', 'Status', active => active ? 'Active' : 'Inactive'],
                 ['id', 'Actions', (_, item) => <button className="text-link" onClick={() => open(item)}>Edit</button>]
             ]} />
@@ -2234,8 +2245,28 @@ function Products({ request, act, busy }) {
                     <Field label="Category"><select value={form.category_id || ''} onChange={e => update('category_id', e.target.value)}>
                         <option value="">Uncategorized</option>{cats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select></Field>
+                    <Field label="Product type"><select value={form.product_type || 'food_beverage'} onChange={e=>update('product_type',e.target.value)}>
+                        <option value="food_beverage">Food & beverage</option><option value="physical">Physical / stock item</option>
+                        <option value="service">Service</option><option value="bundle">Bundle / package</option>
+                        <option value="non_stock">Non-stock item</option>
+                    </select></Field>
+                    <Field label="SKU"><input value={form.sku||''} maxLength={64} placeholder="Generated automatically"
+                        onChange={e=>update('sku',e.target.value)}/></Field>
+                    <Field label="Barcode"><input value={form.barcode||''} maxLength={128} placeholder="Scan or enter code"
+                        onChange={e=>update('barcode',e.target.value)}/></Field>
                     <Field label="Base price (PHP)"><input type="number" min="0" step=".01" value={form.price} onChange={e => update('price', e.target.value)} /></Field>
                     <Field label="Estimated cost (PHP)"><input type="number" min="0" step=".01" value={form.cost} onChange={e => update('cost', e.target.value)} /></Field>
+                </div>
+                <div className="form-grid">
+                    <Field label="Brand"><input value={form.brand||''} maxLength={120} onChange={e=>update('brand',e.target.value)}/></Field>
+                    <Field label="Manufacturer"><input value={form.manufacturer||''} maxLength={120} onChange={e=>update('manufacturer',e.target.value)}/></Field>
+                    <Field label="Product photo HTTPS URL"><input type="url" value={form.image_url||''} maxLength={1024}
+                        onChange={e=>update('image_url',e.target.value)} placeholder="https://example.com/product.jpg"/></Field>
+                    {form.product_type==='physical' && <Field label="Direct stock item"><select
+                        value={form.stock_item_id||''} onChange={e=>update('stock_item_id',e.target.value)}>
+                        <option value="">No direct stock tracking</option>
+                        {ingredients.map(item=><option key={item.id} value={item.id}>{item.name} ({item.unit})</option>)}
+                    </select></Field>}
                 </div>
                 <Field label="Description"><textarea value={form.description || ''} onChange={e => update('description', e.target.value)} /></Field>
                 <h4>Sizes and variations</h4>
@@ -2245,16 +2276,26 @@ function Products({ request, act, busy }) {
                         <input aria-label="Variation name" value={option.name} onChange={e => updateOption(index, { name: e.target.value })} />
                         <input aria-label="Variation price in PHP" type="number" min="0" step=".01" value={option.price}
                             onChange={e => updateOption(index, { price: e.target.value })} />
+                        <input aria-label="Variation SKU" value={option.sku||''} maxLength={64} placeholder="SKU"
+                            onChange={e=>updateOption(index,{sku:e.target.value})}/>
+                        <input aria-label="Variation barcode" value={option.barcode||''} maxLength={128} placeholder="Barcode"
+                            onChange={e=>updateOption(index,{barcode:e.target.value})}/>
                         <button aria-label="Remove variation" onClick={() => update('variations',
                             form.variations.filter((_, row) => row !== index))}><Trash2 size={17} /></button>
                     </div>
+                    {form.product_type==='physical' && <Field label="Variation-specific stock item (optional)">
+                        <select value={option.stock_item_id||''} onChange={e=>updateOption(index,{stock_item_id:e.target.value})}>
+                            <option value="">Use product stock item</option>
+                            {ingredients.map(item=><option key={item.id} value={item.id}>{item.name} ({item.unit})</option>)}
+                        </select>
+                    </Field>}
                     <label className="check"><input type="checkbox" checked={!!option.use_custom_recipe}
                         onChange={e => updateOption(index, { use_custom_recipe: e.target.checked })} /> Use a custom recipe</label>
                     {option.use_custom_recipe && <RecipeEditor value={option.recipe} ingredients={ingredients}
                         onChange={recipe => updateOption(index, { recipe })} />}
                 </fieldset>)}
                 <button className="text-link" onClick={() => update('variations', [...form.variations,
-                    { name: '', price: form.price, recipe: [] }])}>+ Add variation</button>
+                    { name: '', price: form.price, sku:'', barcode:'',stock_item_id:'',recipe: [] }])}>+ Add variation</button>
                 <h4>Base recipe</h4>
                 <RecipeEditor value={form.recipe} ingredients={ingredients} onChange={recipe => update('recipe', recipe)} />
                 <label className="check"><input type="checkbox" checked={form.active} onChange={e => update('active', e.target.checked)} /> Available for sale</label>
