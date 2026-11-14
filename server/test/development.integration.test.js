@@ -73,6 +73,7 @@ test('Development: cash register, idempotent refunds, purchasing and tenant boun
     const payload={...checkout,register_session_id:session.id};
     const order=await post('shop/checkout',200,payload,owner);
     assert.equal(Number(order.total_cents),2000);
+    assert.equal('estimated_cogs_cents' in order,false,'Cost snapshots stay private to management reports');
     assert.equal((await post('shop/checkout',200,payload,owner)).id,order.id);
     await post('shop/checkout',409,{...payload,amount_tendered_cents:4000},owner);
     const openRegister=await request('shop/register/'+session.id,200,{account:owner});
@@ -138,6 +139,9 @@ test('Development: cash register, idempotent refunds, purchasing and tenant boun
     const report=await request('shop/reports?period=daily',200,{account:owner});
     assert.equal(Number(report.summary.gross_revenue_cents),2000);
     assert.equal(Number(report.summary.refund_cents),2000);
+    assert.equal(Number(report.summary.cogs_cents),200);
+    assert.equal(Number(report.summary.cogs_covered_orders),1);
+    assert.equal(Number(report.summary.estimated_gross_profit_cents),-200);
     assert.equal(Number(report.summary.revenue_cents),0);
     const closed=await post('shop/register/'+session.id+'/close',200,{
         counted_cents:8800
