@@ -136,18 +136,61 @@ test('Development: cash register, idempotent refunds, purchasing and tenant boun
     await request('shop/purchases/'+po.id,404,{account:outsider});
     await request('shop/purchases',403,{account:outsider,tenant:owner.shop.id});
 
+    // A physical product can consume a directly linked stock item rather than a recipe.
+    const spareA=await post('shop/ingredients',200,{
+        name:'Brake pad',unit:'pcs',quantity:2,unit_cost_cents:700,item_type:'product'
+    },owner);
+    const spareB=await post('shop/ingredients',200,{
+        name:'Blue brake pad',unit:'pcs',quantity:3,unit_cost_cents:800,item_type:'product'
+    },owner);
+    const sku='BRAKE-'+nonce.slice(0,8).toUpperCase();
+    const barcode='BP-'+nonce.slice(0,10).toUpperCase();
+    const variantBarcode='BLUE-'+nonce.slice(0,10).toUpperCase();
+    const spareProduct=await post('shop/products',200,{
+        name:'Motorcycle brake pads',price_cents:5000,cost_cents:1000,
+        product_type:'physical',stock_item_id:spareA.id,sku,barcode,
+        brand:'Sample Parts',manufacturer:'Sample Factory',
+        variations:[{name:'Blue model',price_cents:5500,sku:sku+'-BLUE',
+            barcode:variantBarcode,stock_item_id:spareB.id}]
+    },owner);
+    await post('shop/products',409,{
+        name:'Duplicate barcode',price_cents:100,barcode:variantBarcode
+    },owner);
+    await post('shop/products',200,{
+        name:'Same barcode in another tenant',price_cents:100,barcode:variantBarcode
+    },outsider);
+    const inventoryProduct=(await request('shop/products',200,{account:owner}))
+        .find(item=>item.id===spareProduct.id);
+    assert.equal(inventoryProduct.sku,sku);
+    assert.equal(inventoryProduct.variations[0].barcode,variantBarcode);
+    const baseSale=await post('shop/checkout',200,{
+        branch_id:branch.id,client_sale_id:randomUUID(),payment_method:'cash',
+        amount_tendered_cents:6000,register_session_id:session.id,
+        items:[{product_id:spareProduct.id,quantity:1}]
+    },owner);
+    assert.equal(Number(baseSale.total_cents),5000);
+    const variantSale=await post('shop/checkout',200,{
+        branch_id:branch.id,client_sale_id:randomUUID(),payment_method:'cash',
+        amount_tendered_cents:6000,register_session_id:session.id,
+        items:[{product_id:spareProduct.id,variation_id:inventoryProduct.variations[0].id,quantity:1}]
+    },owner);
+    assert.equal(Number(variantSale.total_cents),5500);
+    const finalInventory=await request('shop/ingredients',200,{account:owner});
+    assert.equal(Number(finalInventory.find(item=>item.id===spareA.id).quantity),1);
+    assert.equal(Number(finalInventory.find(item=>item.id===spareB.id).quantity),2);
+
     const report=await request('shop/reports?period=daily',200,{account:owner});
-    assert.equal(Number(report.summary.gross_revenue_cents),2000);
+    assert.equal(Number(report.summary.gross_revenue_cents),12500);
     assert.equal(Number(report.summary.refund_cents),2000);
-    assert.equal(Number(report.summary.cogs_cents),200);
-    assert.equal(Number(report.summary.cogs_covered_orders),1);
-    assert.equal(Number(report.summary.estimated_gross_profit_cents),-200);
-    assert.equal(Number(report.summary.revenue_cents),0);
+    assert.equal(Number(report.summary.cogs_cents),1700);
+    assert.equal(Number(report.summary.cogs_covered_orders),3);
+    assert.equal(Number(report.summary.estimated_gross_profit_cents),8800);
+    assert.equal(Number(report.summary.revenue_cents),10500);
     const closed=await post('shop/register/'+session.id+'/close',200,{
-        counted_cents:8800
+        counted_cents:19300
     },owner);
     assert.equal(closed.status,'closed');
-    assert.equal(closed.expected_cents,9000);
+    assert.equal(closed.expected_cents,19500);
     assert.equal(closed.variance_cents,-200);
     await post('shop/register/'+session.id+'/movements',409,{
         kind:'cash_in',amount_cents:200,reason:'Late cash deposit'
