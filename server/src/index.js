@@ -2576,10 +2576,10 @@ const checkout = quote => data(async (d, r) => {
                 }))) || customerRequest.payment_method!==payment_method) {
                 throw fail(409,'Customer order details changed; restart the payment review');
             }
-            if(!['owner','manager'].includes(r.role)){
-                throw fail(403,'Manager verification required before customer QR order payment is confirmed');
+            if(['cashier','staff'].includes(r.role) && customerRequest.payment_method!=='cash'){
+                throw fail(403,'Electronic customer payments require manager verification');
             }
-            if(r.body.payment_verified!==true)throw fail(409,'Manager must explicitly confirm payment was received');
+            if(r.body.payment_verified!==true)throw fail(409,'Staff must explicitly confirm that full payment was received');
         }
         let heldOrder = null;
         if (!quote && held_order_id) {
