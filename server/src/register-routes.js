@@ -35,6 +35,47 @@ export function registerRegisterRoutes(app, { data, permit, need, fail, audit, i
             [req.tenant, branch, req.role !== 'cashier', req.user.id]);
     }));
 
+    app.get('/api/shop/register/summary', permit('owner','manager','cashier'), data(async (db, req) => {
+        const branch=req.query.branch_id||null;
+        if(branch&&!ident(branch))throw fail(400,'Invalid branch');
+        // Completed orders are reported separately from physical drawer cash;
+        // opening float, cash-in and cash-out are never counted as customer payments.
+        const scope=req.role==='cashier' ? req.user.id : null;
+        const [sessions,sales,refunds]=await Promise.all([
+            rows(db,`SELECT s.id,s.branch_id,s.cashier_id,u.name AS cashier_name,
+                b.name AS branch,s.status,s.opening_cents,s.counted_cents,s.expected_cents,
+                s.variance_cents,s.opened_at,s.closed_at,
+                COALESCE((SELECT sum(m.amount_cents) FROM register_movements m
+                  WHERE m.tenant_id=s.tenant_id AND m.session_id=s.id AND m.kind='sale'),0)::bigint AS cash_sales_cents,
+                COALESCE((SELECT -sum(m.amount_cents) FROM register_movements m
+                  WHERE m.tenant_id=s.tenant_id AND m.session_id=s.id AND m.kind='refund'),0)::bigint AS cash_refunds_cents,
+                COALESCE((SELECT sum(m.amount_cents) FROM register_movements m
+                  WHERE m.tenant_id=s.tenant_id AND m.session_id=s.id),0)::bigint AS movement_cents
+                FROM register_sessions s JOIN users u ON u.id=s.cashier_id
+                JOIN branches b ON b.tenant_id=s.tenant_id AND b.id=s.branch_id
+                WHERE s.tenant_id=$1 AND ($2::uuid IS NULL OR s.branch_id=$2)
+                  AND ($3::uuid IS NULL OR s.cashier_id=$3)
+                ORDER BY s.opened_at DESC LIMIT 100`,[req.tenant,branch,scope]),
+            one(db,`SELECT count(*)::int AS completed_payments,
+                  COALESCE(sum(total_cents),0)::bigint AS gross_collected_cents
+                FROM orders WHERE tenant_id=$1 AND ($2::uuid IS NULL OR branch_id=$2)
+                  AND ($3::uuid IS NULL OR cashier_id=$3)
+                  AND status IN ('paid','partially_refunded','refunded')`,
+                [req.tenant,branch,scope]),
+            one(db,`SELECT COALESCE(sum(r.amount_cents),0)::bigint AS refunded_cents FROM sales_refunds r
+                JOIN orders o ON o.tenant_id=r.tenant_id AND o.id=r.order_id
+                WHERE r.tenant_id=$1 AND ($2::uuid IS NULL OR r.branch_id=$2)
+                AND ($3::uuid IS NULL OR o.cashier_id=$3)`,[req.tenant,branch,scope])
+        ]);
+        const gross=BigInt(sales.gross_collected_cents);
+        const returned=BigInt(refunds.refunded_cents);
+        return { completed_payments:sales.completed_payments,gross_collected_cents:gross.toString(),
+          refunds_cents:returned.toString(),net_collected_cents:(gross-returned).toString(),
+          sessions:sessions.map(row=>({
+            ...row,expected_live_cents:(BigInt(row.opening_cents)+BigInt(row.movement_cents)).toString()
+          })) };
+    }));
+
     app.put('/api/shop/register/policy', permit('owner'), data(async (db, req) => {
         need(typeof req.body.require_cash_register === 'boolean', 'Invalid cash register requirement');
         const settings = await one(db,
