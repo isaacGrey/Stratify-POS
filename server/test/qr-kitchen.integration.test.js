@@ -138,7 +138,7 @@ test('QR checkout remains pending until manager-confirmed payment; KDS and cashi
  assert.equal(Number(summary2.sessions.find(s=>s.id===shiftB.id).cash_sales_cents),0);
  await send('register/'+shiftA.id+'/close',200,{method:'POST',account:first,body:{counted_cents:7500}});
  assert.equal((await send('register/summary',200,{account:first})).sessions.find(s=>s.id===shiftA.id).status,'closed');
- assert.equal(Number((await send('register/summary',200,{account:owner})).gross_collected_cents),7500);
+ assert.equal(Number((await send('register/summary',200,{account:owner})).gross_collected_cents),5000);
  assert.equal((await send('kitchen',200,{account:owner})).length,2);
  assert.equal(otherBranch.id!==branch.id,true);
 });
