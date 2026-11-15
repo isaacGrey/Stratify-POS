@@ -61,6 +61,18 @@ A passing build/integration suite is not a certification or authorization to ope
 
 The existing `server/test/checkout.integration.test.js` continues to cover offline signatures/replay, stock, branch permissions, billing and recovery components.
 
+### 2026-11-16 requirement increment — server and build CI covered
+
+- **Registered business collections:** platform admin business overview and registered-business rows now separate SaaS subscription revenue from confirmed POS customer payments and associated cash refunds, including net totals. Owner's dashboard also includes cashier shift summaries.
+- **Team role isolation:** employee-tailored navigation and dedicated cashier POS, kitchen module, owner/manager QR management; tenant module access and branch RLS continue to enforce backend permissions. A cashier must open a register for each active shift; a replacement employee opens their own session.
+- **Public table menu:** per-table random, hashed and revocable QR bearer tokens; publicly browsable sanitized catalog; rate-limited idempotent pending order requests; read-only order status. Customer cannot mark themselves paid.
+- **Payment boundary:** checkout finalization requires an authenticated operator's explicit confirmation, matching original table/branch/cart/payment method and matching quoted total. Cashiers may verify only actual cash receipt into their own open register. Owner/manager manually attest GCash/Maya/card receipt; **no actual provider integration or verified gateway webhook is implemented**.
+- **KDS:** ticket created only in committed paid checkout transaction; near-real-time 4-second refresh; sequential pending → preparing → ready → completed with audit and branch RLS. No financial amounts in kitchen endpoint.
+- **Tests:** QR paid/unpaid flow, double-submission, different tenant, revoked link, cashier handover, finance collection excluding floats, status progression and cashless cashier rejection.
+- **Operational safeguard:** permanent deletion of businesses with immutable operational journals is blocked pending controlled retention/erasure requirements; administrator can archive rather than bypass financial immutability.
+
+**Outstanding:** automatic provider-verified electronic payment capture/refunds, prepayment customer gateway UX, actual real-time push channels, comprehensive device/browser/PWA testing, compliance, independent security audit, automated signed payment settlement confirmation, and product go-live acceptance.
+
 ## Next implementation slices (ordered)
 
 ### Phase 1: Transaction integrity and offline release gate — CRITICAL
