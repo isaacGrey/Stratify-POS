@@ -4134,6 +4134,10 @@ function Admin({ request, act, section }) {
                 <Metric label="Total collected" val={money(overview?.collected_cents || 0)} icon={Wallet} tint="peach" foot="Verified subscription payments"/>
 
                 <Metric label="Collected this month" val={money(overview?.collected_this_month_cents || 0)} icon={CreditCard} tint="sand" foot="From paid billing records"/>
+                <Metric label="Merchant customer payments" val={money(overview?.customer_gross_collected_cents || 0)}
+                    icon={Receipt} tint="sage" foot="Completed POS transactions, not SaaS revenue"/>
+                <Metric label="Merchant customer refunds" val={money(overview?.customer_refunds_cents || 0)}
+                    icon={Wallet} tint="sand" foot="Cash refunds recorded by businesses"/>
             </div>
 
             <div className="metrics" style={{
@@ -4218,9 +4222,12 @@ function Admin({ request, act, section }) {
             ],
             [
                 'paid_cents',
-                'Payments collected',
+                'Subscription payments',
                 (value) => money(value)
             ],
+            ['customer_gross_collected_cents','POS customer payments',money],
+            ['customer_refunds_cents','Customer refunds',money],
+            ['customer_net_collected_cents','Net POS collected',money],
             [
                 'status',
                 'Shop status',
