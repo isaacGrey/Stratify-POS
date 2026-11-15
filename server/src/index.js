@@ -3235,7 +3235,11 @@ const adminShopDetailsSql = `
 
         COALESCE(pay.paid_cents, 0)::bigint AS paid_cents,
         COALESCE(pay.payment_count, 0)::int AS payment_count,
-        pay.last_payment_at
+        pay.last_payment_at,
+        COALESCE(sales.gross_cents,0)::bigint AS customer_gross_collected_cents,
+        COALESCE(refunds.refunded_cents,0)::bigint AS customer_refunds_cents,
+        (COALESCE(sales.gross_cents,0)-COALESCE(refunds.refunded_cents,0))::bigint AS customer_net_collected_cents,
+        COALESCE(sales.paid_orders,0)::int AS completed_customer_payments
 
     FROM tenants t
 
@@ -3254,6 +3258,16 @@ const adminShopDetailsSql = `
         WHERE sp.tenant_id = t.id
           AND sp.status = 'paid'
     ) pay ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT COALESCE(sum(o.total_cents),0)::bigint AS gross_cents,
+               count(*)::int AS paid_orders
+        FROM orders o WHERE o.tenant_id=t.id
+        AND o.status IN ('paid','partially_refunded','refunded')
+    ) sales ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT COALESCE(sum(r.amount_cents),0)::bigint AS refunded_cents
+        FROM sales_refunds r WHERE r.tenant_id=t.id
+    ) refunds ON TRUE
 `;
 
 // ======================================================
@@ -3329,6 +3343,9 @@ app.get(
                     FROM subscription_payments
                     WHERE status = 'pending'
                 ) AS pending_payments,
+                (SELECT COALESCE(sum(total_cents),0)::bigint FROM orders
+                  WHERE status IN ('paid','partially_refunded','refunded')) AS customer_gross_collected_cents,
+                (SELECT COALESCE(sum(amount_cents),0)::bigint FROM sales_refunds) AS customer_refunds_cents,
 
                 (
                     SELECT COUNT(*)::int
