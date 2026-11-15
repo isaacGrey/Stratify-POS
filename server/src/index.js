@@ -2786,6 +2786,9 @@ const checkout = quote => data(async (d, r) => {
         } else {
             need(!register_session_id, 'Only cash sales may use a cash register');
         }
+        if (!grant && ['cashier','staff'].includes(r.role) && !cashRegister) {
+            throw fail(409,'Open your own cash register before completing a shift sale');
+        }
 
         const costComponents = [];
         for (const line of lines) {
