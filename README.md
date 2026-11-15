@@ -58,6 +58,23 @@ npm run dev
 
 **Database role:** `scoped()` uses `SET LOCAL ROLE coffee_saas_runtime`. In production, the API connection must not be a superuser or have `BYPASSRLS`. Use separate migration and runtime credentials, minimal grants and auditable secrets management.
 
+## New team, table QR and kitchen workflows (November 2026)
+
+**Source:** `POS New requirements .txt`. These are development-branch features, and they are not a real cashless payment gateway, BIR-certified checkout, or a replacement for actual cash-count reconciliation.
+
+- **Registered businesses:** The platform dashboard separates SaaS subscription receipts from each merchant's customer payments. Per-business columns show completed POS customer payments, recorded refunds and net collections. Opening drawer floats are not customer revenue.
+- **Dedicated team POS:** Cashiers use the employee-oriented workspace. Management pages are hidden according to effective module permissions, and server middleware enforces those permissions. The owner/manager dashboard remains separate. Staff without POS permission see only assigned operational pages.
+- **Shift cash registers:** Each cashier can open one register session at a time, with their own starting cash float. Another cashier can start a separate register during a shift handover. Paid cash sales, refunds, manual cash movements and closing variances remain associated with the correct session; reporting shows sessions separately. Server checkout requires a cashier's own open drawer for online shift sales. Offline checkouts require reconciliation and are not automatically assigned to a drawer.
+- **Table QR menu:** Owners enable customer menus under **Customer QR Menus** (disabled by default). Owners/managers generate or rotate table QR codes; the link is shown only at generation time, and revoked/rotated codes become invalid. Customers scan to browse the active menu and send a **pending payment request**, never a paid order. QR images are generated on-device using a locally vendored MIT QR encoder; table tokens are not sent to remote QR image services. The Vercel app has a direct `/menu/:token` rewrite.
+- **Payment verification:** Payment requests remain separate from POS transactions and kitchen tickets until reviewed. Staff/cashiers with POS access can record a reference and verify **cash received in their own drawer**. Electronic payments (GCash, Maya and card) may only be manually attested by an owner/manager. **There is no automatic provider authorization, capture, signature confirmation or settlement reconciliation**; the operator must verify a real external payment first. Changed order totals block confirmation until the customer restarts the request.
+- **Kitchen Display System:** Only successful paid POS sales create tickets. Preparation staff see customer product names/quantities, not private financial amounts. KDS auto-refreshes every four seconds; it is near-live polling, not a push/SSE connection. Tickets advance Pending → Preparing → Ready → Completed with audited status changes and branch/tenant access controls.
+
+### Testing and remaining limitations
+
+The development GitHub Actions workflow runs clean PostgreSQL 18 schema migrations, the historical checkout suite, original Development tests, new QR-menu and kitchen tests, TypeScript validation and the client build. QR tests check that unpaid requests never enter KDS, idempotent retries, payment-review requirements, QR link revocation, status transitions, cross-tenant isolation and independent drawer handover.
+
+**Still requires pre-release checks:** Actual cashless gateway integration and signed webhooks; end-to-end payment reconciliation; BIR/fiscal-compliant receipts; test of real QR scanners, tablets and network dropouts; device-specific cashier station handover, printer/cash drawer integration, high-load tests; and production UX/security review. Do not enable this feature on paying production merchants until acceptance tests and regulatory requirements are completed. Permanent tenant deletion with immutable journals is intentionally blocked pending a documented retention/erasure process; use archive instead of circumventing ledger protection.
+
 ## Development branch additions
 
 Migrations `021`–`025` add operational ledgers, register reconciliation, purchase receipts, supervised cash refunds, cost snapshots, SKU/barcode registry, direct physical-stock links and held-order drafts. They are applied transactionally by `npm run migrate`. **Back up your database first**, test against a restored copy, and verify rollback/recovery before applying to a deployment with real data.
