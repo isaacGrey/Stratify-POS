@@ -2530,7 +2530,11 @@ const checkout = quote => data(async (d, r) => {
             'Invalid order type/payment'
         );
 
-        const { client_sale_id, offline, expected, register_session_id = null, held_order_id = null } = r.body;
+        const { client_sale_id, offline, expected, register_session_id = null, held_order_id = null,
+            customer_request_id = null } = r.body;
+        if(customer_request_id && (quote || offline || held_order_id || !ident(customer_request_id))) {
+            throw fail(400,'Invalid customer checkout reference');
+        }
         const supervisorReplay = r.params.originalCashier !== undefined;
         const cashierId = r.params.originalCashier || r.user.id;
         if (supervisorReplay) need(ident(cashierId) && offline, 'A signed offline sale is required');
@@ -2556,6 +2560,26 @@ const checkout = quote => data(async (d, r) => {
             }
         }
 
+        let customerRequest = null;
+        if(!quote && customer_request_id){
+            customerRequest=await one(d,
+              'SELECT * FROM customer_order_requests WHERE tenant_id=$1 AND id=$2 FOR UPDATE',
+              [r.tenant,customer_request_id]);
+            if(!customerRequest)throw fail(404,'Customer checkout request unavailable');
+            if(customerRequest.status!=='payment_review')throw fail(409,'Customer payment has not been reviewed');
+            if(customerRequest.branch_id!==branch_id || customerRequest.table_id!==table_id ||
+                order_type!=='dine_in' || JSON.stringify(customerRequest.cart)!==
+                JSON.stringify(items.map(item=>({
+                    product_id:item.product_id,variation_id:item.variation_id||null,
+                    addon_ids:[...(item.addon_ids||[])].sort(),quantity:item.quantity
+                }))) || customerRequest.payment_method!==payment_method) {
+                throw fail(409,'Customer order details changed; restart the payment review');
+            }
+            if(!['owner','manager'].includes(r.role)){
+                throw fail(403,'Manager verification required before customer QR order payment is confirmed');
+            }
+            if(r.body.payment_verified!==true)throw fail(409,'Manager must explicitly confirm payment was received');
+        }
         let heldOrder = null;
         if (!quote && held_order_id) {
             need(ident(held_order_id) && client_sale_id,
@@ -2852,6 +2876,13 @@ const checkout = quote => data(async (d, r) => {
             ]
         );
 
+        if(customerRequest){
+            await d.query(
+              "UPDATE customer_order_requests SET status='confirmed',confirmed_at=now(),confirmed_by=$3,order_id=$4,updated_at=now() WHERE tenant_id=$1 AND id=$2",
+              [r.tenant,customerRequest.id,r.user.id,order.id]
+            );
+            await audit(d,r,'customer_order.payment_confirmed',{request_id:customerRequest.id,order_id:order.id,method:payment_method});
+        }
         await enqueueKitchenTicket(d,r.tenant,order);
 
         for (const [position, x] of lines.entries()) {
