@@ -2773,6 +2773,9 @@ const checkout = quote => data(async (d, r) => {
             taxable * settings.service_basis_points / 10000
         );
         const total = taxable + tax + service;
+        if(customerRequest && total!==Number(customerRequest.quoted_total_cents)){
+            throw fail(409,'Customer total changed before payment confirmation. Cancel and resubmit the request.');
+        }
         if (quote) return {
             subtotal_cents: subtotal, discount_cents: discount, tax_cents: tax, service_cents: service, total_cents: total,
             loyalty_points: loyalty?.points ?? null
@@ -2961,9 +2964,9 @@ const checkout = quote => data(async (d, r) => {
         };
 });
 
-app.post('/api/shop/checkout/quote', permit('owner', 'manager', 'cashier'), checkout(true));
+app.post('/api/shop/checkout/quote', permit('owner', 'manager', 'cashier', 'staff'), checkout(true));
 app.post('/api/shop/checkout/reconcile/:originalCashier', permit('owner', 'manager'), checkout(false));
-app.post('/api/shop/checkout', permit('owner', 'manager', 'cashier'), checkout(false));
+app.post('/api/shop/checkout', permit('owner', 'manager', 'cashier', 'staff'), checkout(false));
 
 // TRANSACTIONS
 
