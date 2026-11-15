@@ -4,6 +4,7 @@ import { BusinessEditor, moduleLabels, PermissionFields, PlatformPage } from './
 import { Button, Empty, Field, Heading, Load, Modal, Panel, Table, fmt, money, pesos, useLoad } from './ui';
 import { fetchPaymentMethods, paymentStageLabel, ReceiptSubmission, type PaymentMethod } from './billing';
 import { CashRegisterPanel, PurchasingPage, RefundDialog } from './operations';
+import { CustomerOrdersQueue, KitchenDisplay, MenuManagement, RegisterSummary } from './kitchen-menu';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { LayoutDashboard, Coffee, Package, ChartNoAxesCombined, Users, Settings, Store, LogOut, Plus, Search, ShoppingCart, Minus, Trash2, Receipt, ArrowRight, ChevronDown, Menu, X, Bell, Clock, CalendarDays, Tags, CreditCard, ShieldCheck, Sun, Layers, UserRound, ClipboardList, CheckCircle2, Printer, ArrowUpRight, Wallet, AlertTriangle } from 'lucide-react';
@@ -63,6 +64,8 @@ const routes: [
 ][] = [
     ['overview', 'Dashboard', LayoutDashboard],
     ['pos', 'Point of Sale', ScanLine],
+    ['kitchen','Kitchen Display',Coffee],
+    ['menu','Customer QR Menus',ClipboardList],
     ['products', 'Products & Services', ShoppingBag],
     ['inventory', 'Inventory Management', Boxes],
     ['purchasing', 'Purchasing & Suppliers', ClipboardList],
@@ -423,20 +426,22 @@ const currentShop = me?.shops?.find(
 );
 
     const role = currentShop?.role || '';
-    const canManage = ['owner', 'manager'].includes(role), canSell = ['owner', 'manager', 'cashier'].includes(role);
+    const canManage = ['owner', 'manager'].includes(role), canSell = ['owner', 'manager', 'cashier','staff'].includes(role);
     
 const allowed = key => currentShop?.modules?.[key] !== false;
 const visibleRoutes = routes.filter(([id]) => {
     if (id==='settings') return canManage && (allowed('settings') || allowed('billing'));
     if (id==='staff') return allowed('staff') || allowed('attendance');
     if (id==='pos') return canSell && allowed('pos');
+    if (id==='kitchen') return allowed('kitchen');
+    if (id==='menu') return canManage && allowed('menu');
     if (['branches','promotions','products','inventory','purchasing'].includes(id)) return canManage && allowed(id);
     if (id==='reports') return currentShop?.modules ? allowed(id) : canManage;
     return allowed(id);
 });
 const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
     : serverAvailable === false && currentShop && canSell && allowed('pos') ? 'pos'
-    : visibleRoutes.some(([id]) => id===page) ? page : visibleRoutes[0]?.[0];
+    : visibleRoutes.some(([id]) => id===page) ? page : (role==='cashier'||role==='staff' ? visibleRoutes.find(([id])=>id==='pos')?.[0]||visibleRoutes[0]?.[0] : visibleRoutes[0]?.[0]);
 
     // Show invitation and password reset pages even when
     // a shop owner or another user is already logged in.
@@ -464,13 +469,13 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
                 window.location.replace('/app');
             }} publicReq={publicReq}/>);
     }
-    return <div className="shell"><aside className={'sidebar ' + (mobile ? 'opened' : '')}><div className="brand">
+    return <div className={'shell '+(['cashier','staff'].includes(role)?'employee-shell':'management-shell')}><aside className={'sidebar ' + (mobile ? 'opened' : '')}><div className="brand">
         <div className="brand-icon">
             <img src="/stratify-logo.png" alt="StratifyPOS logo" />
         </div>
         <span>
             Stratify<span className="brand-dot">POS</span>
-            <small>SMART BUSINESS MANAGEMENT</small>
+            <small>{['cashier','staff'].includes(role)?'TEAM WORKSPACE':'SMART BUSINESS MANAGEMENT'}</small>
         </span>
         <button className="icon-btn mobile-close" onClick={() => setMobile(false)}><X size={19}/></button></div><div className="workspace"><div className="workspace-icon"><Store size={19}/></div><div><small>WORKSPACE</small>
         
@@ -557,8 +562,8 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
             
             <div className="support">
                 <span className="support-emoji"><LayoutDashboard size={26}/></span>
-                <strong>Business made simple.</strong>
-                <p>Sales, inventory, staff, and reporting — all in one place.</p>
+                <strong>{['cashier','staff'].includes(role)?'Team operations':'Business made simple.'}</strong>
+                <p>{['cashier','staff'].includes(role)?'Only your permitted work tools appear here.':'Sales, inventory, staff, and reporting — all in one place.'}</p>
             </div>
             <button className="nav-item" onClick={logout}><LogOut size={18}/>Sign out</button></div></aside>
         <div className="main"><header className="topbar"><div className="top-left"><button className="icon-btn menu-trigger" onClick={() => setMobile(true)}><Menu /></button><div className="breadcrumb">Workspace <span>/</span> <b>{activePage === 'admin' ? platformNavigation.find(row => row[0]===adminSection)?.[1] : routes.find(x => x[0] === activePage)?.[1]}</b></div></div><div className="top-actions"><span className="today"><CalendarDays size={16}/>{new Date().toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}</span><span className="user-avatar">{me.user.name.slice(0, 1).toUpperCase()}</span><div className="user-info"><strong>{me.user.name}</strong><small>{role || 'Platform Admin'}</small></div></div></header>
@@ -596,6 +601,7 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
             go={setPage}
         />
 )}
+{activePage==='overview' && currentShop && serverAvailable===true && canManage && <RegisterSummary request={request} role={role}/>}
 
 
 {/* ==========================================
@@ -603,7 +609,10 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
    ========================================== */}
 
 
-{activePage === 'pos' && currentShop && (
+{activePage === 'pos' && currentShop && <div className={['cashier','staff'].includes(role)?'dedicated-employee-pos':''}>
+    {['cashier','staff'].includes(role) && <div className="employee-pos-banner">
+      <h2>Cashier point of sale</h2><p>Sell products and manage your own shift register. Management tools are kept separate.</p>
+    </div>}
     <OfflineSessionGuard
         tenantId={shop}
         online={serverAvailable}
@@ -624,6 +633,8 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
             </>}
         </OfflinePOSGate>
     </OfflineSessionGuard>
+    {canManage && serverAvailable===true && <CustomerOrdersQueue request={request}/>}
+ </div>
 )}
 
 
@@ -652,6 +663,11 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
             act={act}
         />
 )}
+
+{/* KITCHEN DISPLAY — paid orders only */}
+{activePage==='kitchen' && currentShop && serverAvailable===true && <KitchenDisplay request={request}/>}
+{/* CUSTOMER QR MENUS — owner and manager only */}
+{activePage==='menu' && currentShop && serverAvailable===true && <MenuManagement request={request} appOrigin={window.location.origin}/>}
 
 {/* PURCHASING */}
 {activePage === 'purchasing' && currentShop && serverAvailable === true && (
