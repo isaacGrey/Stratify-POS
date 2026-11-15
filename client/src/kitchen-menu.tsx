@@ -103,7 +103,7 @@ function LocalQrCode({url,label}:{url:string;label:string}) {
  </div>;
 }
 
-export function MenuManagement({request,appOrigin}:{request:ApiRequest;appOrigin:string}) {
+export function MenuManagement({request,appOrigin,role}:{request:ApiRequest;appOrigin:string;role:string}) {
  const {data:links,load}=useLoad(request,'menu/links');
  const {data:tables}=useLoad(request,'tables');
  const {data:settings,load:settingsLoad}=useLoad(request,'settings');
@@ -115,7 +115,7 @@ export function MenuManagement({request,appOrigin}:{request:ApiRequest;appOrigin
    {error&&<p role="alert" className="flash error">{error}</p>}{notice&&<p className="flash success">{notice}</p>}
    <Panel title="Public menu availability">
     <label className="operations-toggle"><input type="checkbox" checked={Boolean(settings?.customer_menu_enabled)}
-      disabled={working||!settings}
+      disabled={working||!settings||role!=='owner'}
       onChange={e=>run(async()=>{await request('menu/policy','PUT',{enabled:e.target.checked});settingsLoad();setNotice('Public menu policy saved.');})}/>
       Allow customers to view menus using their table QR codes</label>
     <p className="operations-note">Customers can submit a payment request; a manager must verify money was actually received before it becomes a completed POS sale or enters the kitchen. Rotating a QR invalidates older printed codes.</p>
