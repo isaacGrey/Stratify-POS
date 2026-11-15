@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {test} from 'node:test';
+import {pool} from '../src/db.js';
 
 const database=process.env.STRATIFYPOS_TEST_DATABASE_URL;
 test('QR checkout remains pending until manager-confirmed payment; KDS and cashier registers isolate tenants', {
@@ -98,6 +99,8 @@ test('QR checkout remains pending until manager-confirmed payment; KDS and cashi
  await send('menu/links/'+table.id+'/revoke',200,{method:'POST',account:owner,body:{}});
  await send('menu/'+qr.token,404,{publicRequest:true});
 
+ // This isolated test uses a paid-plan fixture to allow two team seats in the same tenant.
+ await pool.query("UPDATE subscriptions SET plan_id='basic',status='active',current_period_ends_at=now()+interval '30 days' WHERE tenant_id=$1",[owner.shop.id]);
  // Cashier register handover: two separate people, independent drawers, no double-opening.
  const cashier1=await send('staff',200,{method:'POST',account:owner,body:{
    name:'Cashier One',email:'cash1-'+nonce+'@example.invalid',password:'cash-'+nonce,role:'cashier'
