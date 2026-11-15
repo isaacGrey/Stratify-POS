@@ -634,8 +634,7 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
         </OfflinePOSGate>
     </OfflineSessionGuard>
     {canManage && serverAvailable===true && <CustomerOrdersQueue request={request}/>}
- </div>
-)}
+ </div>}
 
 
 
