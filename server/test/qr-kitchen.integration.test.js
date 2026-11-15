@@ -118,6 +118,22 @@ test('QR checkout remains pending until manager-confirmed payment; KDS and cashi
  await send('register/open',409,{method:'POST',account:first,body:{branch_id:branch.id,opening_cents:7000}});
  const shiftB=await send('register/open',200,{method:'POST',account:second,body:{branch_id:branch.id,opening_cents:8000}});
  assert.notEqual(shiftA.id,shiftB.id);
+ // QR cash payment can be confirmed by the cashier with their own open drawer.
+ const secondTable=await send('tables',200,{method:'POST',account:owner,
+  body:{branch_id:branch.id,label:'B2',seats:2}});
+ const secondQr=await send('menu/links/'+secondTable.id+'/rotate',200,{method:'POST',account:owner,body:{}});
+ const cashierRequest=await send('menu/'+secondQr.token+'/requests',202,{method:'POST',publicRequest:true,
+  body:{request_id:randomUUID(),items:[{product_id:p.id,quantity:1}],payment_method:'cash'}});
+ await send('menu/requests/'+cashierRequest.request_id+'/payment-review',200,{method:'POST',account:first,
+   body:{reference:'SHIFT-CASH-'+nonce.slice(0,8)}});
+ const cashierConfirmed=await send('checkout',200,{method:'POST',account:first,body:{
+  branch_id:branch.id,table_id:secondTable.id,order_type:'dine_in',
+  customer_request_id:cashierRequest.request_id,payment_verified:true,
+  client_sale_id:cashierRequest.request_id,payment_method:'cash',amount_tendered_cents:2500,
+  register_session_id:shiftA.id,items:[{product_id:p.id,quantity:1}]
+ }});
+ assert.equal(cashierConfirmed.register_session_id,shiftA.id);
+ assert.equal((await send('kitchen',200,{account:owner})).some(x=>x.order_id===cashierConfirmed.id),true);
  const shiftSale=await send('checkout',200,{method:'POST',account:first,body:{
   branch_id:branch.id,client_sale_id:randomUUID(),payment_method:'cash',
   register_session_id:shiftA.id,amount_tendered_cents:3000,
@@ -134,11 +150,11 @@ test('QR checkout remains pending until manager-confirmed payment; KDS and cashi
  assert.equal(summary1.sessions.some(s=>s.id===shiftB.id),false);
  assert.equal(summary2.sessions.some(s=>s.id===shiftA.id),false);
  assert.equal(summary2.sessions.some(s=>s.id===shiftB.id),true);
- assert.equal(Number(summary1.sessions.find(s=>s.id===shiftA.id).cash_sales_cents),2500);
+ assert.equal(Number(summary1.sessions.find(s=>s.id===shiftA.id).cash_sales_cents),5000);
  assert.equal(Number(summary2.sessions.find(s=>s.id===shiftB.id).cash_sales_cents),0);
- await send('register/'+shiftA.id+'/close',200,{method:'POST',account:first,body:{counted_cents:7500}});
+ await send('register/'+shiftA.id+'/close',200,{method:'POST',account:first,body:{counted_cents:10000}});
  assert.equal((await send('register/summary',200,{account:first})).sessions.find(s=>s.id===shiftA.id).status,'closed');
- assert.equal(Number((await send('register/summary',200,{account:owner})).gross_collected_cents),5000);
- assert.equal((await send('kitchen',200,{account:owner})).length,2);
+ assert.equal(Number((await send('register/summary',200,{account:owner})).gross_collected_cents),7500);
+ assert.equal((await send('kitchen',200,{account:owner})).length,3);
  assert.equal(otherBranch.id!==branch.id,true);
 });
