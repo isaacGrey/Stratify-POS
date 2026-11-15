@@ -49,6 +49,7 @@ test('QR checkout remains pending until manager-confirmed payment; KDS and cashi
  assert.equal(policy.customer_menu_enabled,true);
  const qr=await send('menu/links/'+table.id+'/rotate',200,{method:'POST',account:owner,body:{}});
  assert.equal(qr.token.length,64);
+ await send('menu/policy',403,{method:'PUT',account:outsider,body:{enabled:true}});
  const menu=await send('menu/'+qr.token,200,{publicRequest:true});
  assert.equal(menu.table,'A1');
  assert.equal(menu.products.find(x=>x.id===p.id).name,'QR Espresso');
@@ -152,6 +153,20 @@ test('QR checkout remains pending until manager-confirmed payment; KDS and cashi
  assert.equal(summary2.sessions.some(s=>s.id===shiftB.id),true);
  assert.equal(Number(summary1.sessions.find(s=>s.id===shiftA.id).cash_sales_cents),5000);
  assert.equal(Number(summary2.sessions.find(s=>s.id===shiftB.id).cash_sales_cents),0);
+ // A cash-only cashier cannot approve unverified electronic QR transactions.
+ const eTable=await send('tables',200,{method:'POST',account:owner,body:{branch_id:branch.id,label:'C3',seats:2}});
+ const eToken=await send('menu/links/'+eTable.id+'/rotate',200,{method:'POST',account:owner,body:{}});
+ const eReq=await send('menu/'+eToken.token+'/requests',202,{publicRequest:true,method:'POST',
+   body:{request_id:randomUUID(),items:[{product_id:p.id,quantity:1}],payment_method:'gcash'}});
+ await send('menu/requests/'+eReq.request_id+'/payment-review',200,{method:'POST',account:first,body:{
+   reference:'GCASH-REVIEW-'+nonce.slice(0,8)
+ }});
+ await send('checkout',403,{method:'POST',account:first,body:{
+   branch_id:branch.id,table_id:eTable.id,order_type:'dine_in',
+   customer_request_id:eReq.request_id,payment_verified:true,client_sale_id:eReq.request_id,
+   payment_method:'gcash',items:[{product_id:p.id,quantity:1}]
+ }});
+ assert.equal((await send('kitchen',200,{account:owner})).length,3);
  await send('register/'+shiftA.id+'/close',200,{method:'POST',account:first,body:{counted_cents:10000}});
  assert.equal((await send('register/summary',200,{account:first})).sessions.find(s=>s.id===shiftA.id).status,'closed');
  assert.equal(Number((await send('register/summary',200,{account:owner})).gross_collected_cents),7500);
