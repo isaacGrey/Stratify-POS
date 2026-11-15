@@ -1,0 +1,11 @@
+{
+  "rewrites": [
+    { "source": "/menu/:token", "destination": "/index.html" },
+    { "source": "/menu/:token/", "destination": "/index.html" },
+    { "source": "/app/:path*", "destination": "/index.html" },
+    { "source": "/login", "destination": "/index.html" },
+    { "source": "/register", "destination": "/index.html" },
+    { "source": "/invite", "destination": "/index.html" },
+    { "source": "/reset", "destination": "/index.html" }
+  ]
+}
