@@ -67,6 +67,42 @@ export function KitchenDisplay({request}:{request:ApiRequest}) {
  </div>;
 }
 
+function LocalQrCode({url,label}:{url:string;label:string}) {
+ const container=React.useRef<HTMLDivElement>(null);
+ const [failure,setFailure]=useState('');
+ useEffect(()=>{
+   let disposed=false;
+   const global=window as Window & {QRCode?:any};
+   const draw=()=>{
+     if(disposed||!container.current||!global.QRCode)return;
+     try{
+       container.current.replaceChildren();
+       new global.QRCode(container.current,{
+         text:url,width:160,height:160,
+         colorDark:'#152b20',colorLight:'#ffffff',
+         correctLevel:global.QRCode.CorrectLevel.M
+       });
+       setFailure('');
+     }catch{setFailure('Unable to generate QR. Copy the secure menu link instead.');}
+   };
+   if(global.QRCode){draw();return()=>{disposed=true;};}
+   const script=document.querySelector<HTMLScriptElement>('script[data-stratify-qr]');
+   const tag=script||document.createElement('script');
+   const failed=()=>{if(!disposed)setFailure('QR encoder unavailable. Copy the link instead.');};
+   tag.addEventListener('load',draw);
+   tag.addEventListener('error',failed);
+   if(!script){
+     tag.src='/vendor/qrcode.min.js';tag.async=true;
+     tag.dataset.stratifyQr='true';document.head.appendChild(tag);
+   }
+   return()=>{disposed=true;tag.removeEventListener('load',draw);tag.removeEventListener('error',failed);};
+ },[url]);
+ return <div className="qr-local">
+   <div ref={container} role="img" aria-label={label}/>
+   {failure&&<small role="status">{failure}</small>}
+ </div>;
+}
+
 export function MenuManagement({request,appOrigin}:{request:ApiRequest;appOrigin:string}) {
  const {data:links,load}=useLoad(request,'menu/links');
  const {data:tables}=useLoad(request,'tables');
@@ -92,8 +128,7 @@ export function MenuManagement({request,appOrigin}:{request:ApiRequest;appOrigin
       return <div className="qr-table-row" key={table.id}>
        <div><strong>{table.label}</strong><small>{current?.active?'Active · token only shown when generated':'No active QR link'}</small></div>
        {url&&<div className="qr-issued"><code>{url}</code><Button secondary onClick={()=>navigator.clipboard.writeText(url)}>Copy link</Button>
-         <img alt={'QR menu for table '+table.label}
-            src={'https://api.qrserver.com/v1/create-qr-code/?size=150x150&data='+encodeURIComponent(url)}/>
+         <LocalQrCode url={url} label={'QR menu for table '+table.label}/>
        </div>}
        <Button secondary disabled={working} onClick={()=>run(async()=>{
         if(current?.active&&!window.confirm('Replace the printed QR for '+table.label+'?'))return;
