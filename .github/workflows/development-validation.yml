@@ -49,7 +49,7 @@ jobs:
       - name: Apply migrations on isolated PostgreSQL 18
         run: npm run migrate
       - name: Run integration tests
-        run: node --test test/checkout.integration.test.js test/development.integration.test.js
+        run: node --test test/checkout.integration.test.js test/development.integration.test.js test/qr-kitchen.integration.test.js
 
   client:
     name: TypeScript / production build
