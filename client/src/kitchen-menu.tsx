@@ -212,7 +212,7 @@ export function CustomerOrdersQueue({request,role,cashierId}:{request:ApiRequest
          : 'I verified full settlement through the external payment provider.'}</label>
      {!['owner','manager'].includes(role)&&selected.payment_method!=='cash'&&
        <p className="flash warning">Ask an owner or manager to verify this electronic payment.</p>}
-     <Button disabled={busy||!verified||(!['owner','manager'].includes(role)&&selected.payment_method!=='cash)}
+     <Button disabled={busy||!verified||(!['owner','manager'].includes(role)&&selected.payment_method!=='cash')}
        onClick={confirm}>Confirm paid & send to kitchen</Button>
    </>}
    <Button secondary disabled={busy} onClick={()=>setSelected(null)}>Close review</Button>
