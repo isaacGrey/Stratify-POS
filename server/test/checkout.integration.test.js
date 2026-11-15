@@ -443,8 +443,12 @@ test('migrations, POS reconciliation, billing and tenant isolation', {
 
     const secondBranch = (await pool.query('INSERT INTO branches (tenant_id,name) VALUES ($1,$2) RETURNING id',
         [owner.shop.id,'Secondary branch'])).rows[0];
+    const handoverRegister = await post('shop/register/open', 200, {
+        branch_id: secondBranch.id, opening_cents: 1000
+    }, employeeSession);
     const hiddenOrder = await post('shop/checkout', 200, {
-        branch_id: secondBranch.id, payment_method: 'cash', amount_tendered_cents: 200,
+        branch_id: secondBranch.id, register_session_id: handoverRegister.id,
+        payment_method: 'cash', amount_tendered_cents: 200,
         items: [{ product_id: dineInProduct.id, quantity: 1 }]
     }, employeeSession);
     const memberAccess = 'shop/staff/' + employee.id + '/access';
