@@ -2567,8 +2567,10 @@ const checkout = quote => data(async (d, r) => {
             if(!customerRequest)throw fail(404,'Customer checkout request unavailable');
             if(customerRequest.status!=='payment_review')throw fail(409,'Customer payment has not been reviewed');
             if(customerRequest.branch_id!==branch_id || customerRequest.table_id!==table_id ||
-                order_type!=='dine_in' || JSON.stringify(customerRequest.cart)!==
-                JSON.stringify(items.map(item=>({
+                order_type!=='dine_in' || JSON.stringify(customerRequest.cart.map(item=>({
+                    product_id:item.product_id,variation_id:item.variation_id||null,
+                    addon_ids:[...(item.addon_ids||[])].sort(),quantity:item.quantity
+                })))!==JSON.stringify(items.map(item=>({
                     product_id:item.product_id,variation_id:item.variation_id||null,
                     addon_ids:[...(item.addon_ids||[])].sort(),quantity:item.quantity
                 }))) || customerRequest.payment_method!==payment_method) {
