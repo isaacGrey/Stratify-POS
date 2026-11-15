@@ -619,13 +619,13 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
     >
         <OfflinePOSGate tenantId={shop} cashierId={me.user.id} online={serverAvailable} request={request}>
             {(posRequest, offline) => <>
-                {!offline && <details className="offline-preparation">
+                {!offline && canManage && <details className="offline-preparation">
                     <summary>Prepare a branch for offline checkout</summary>
                     <OfflineCatalogSetup request={request} tenantId={shop} />
                 </details>}
-                <OfflineSales {...localSales} online={!offline} cashierId={me.user.id}
+                {(canManage || offline) && <OfflineSales {...localSales} online={!offline} cashierId={me.user.id}
                     reconcile={canReconcileSales ? sale => reconcileOfflineSale(request, sale) : undefined} showReceipt={receipt =>
-                    setLocalReceipt({ shop, user: me.user.id, receipt })} />
+                    setLocalReceipt({ shop, user: me.user.id, receipt })} />}
                 {localReceipt?.shop === shop && localReceipt.user === me.user.id &&
                     <ReceiptModal receipt={localReceipt.receipt} close={() => setLocalReceipt(null)} />}
                 <POS key={shop + ':' + me.user.id} scope={shop + ':' + me.user.id}
@@ -633,7 +633,10 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
             </>}
         </OfflinePOSGate>
     </OfflineSessionGuard>
-    {canManage && serverAvailable===true && <CustomerOrdersQueue request={request}/>}
+    {serverAvailable===true && allowed('pos') && <details className="operations-compact">
+      <summary><ClipboardList size={16}/> Table QR checkout requests</summary>
+      <CustomerOrdersQueue request={request} role={role} cashierId={me.user.id}/>
+    </details>}
  </div>}
 
 
