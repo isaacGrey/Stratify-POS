@@ -4050,6 +4050,27 @@ app.delete(
                 exclusiveUserIds.length
             );
 
+            // Fail closed before any destructive mutation when ledger, checkout
+            // cost or kitchen records would be orphaned. Existing immutable
+            // financial journals must follow a documented retention/erasure
+            // workflow rather than bypassing append-only triggers.
+            const operationalHistory = await one(db,`
+                SELECT (
+                    (SELECT count(*) FROM register_sessions WHERE tenant_id=$1) +
+                    (SELECT count(*) FROM register_movements WHERE tenant_id=$1) +
+                    (SELECT count(*) FROM sales_refunds WHERE tenant_id=$1) +
+                    (SELECT count(*) FROM purchase_orders WHERE tenant_id=$1) +
+                    (SELECT count(*) FROM order_cost_components WHERE tenant_id=$1) +
+                    (SELECT count(*) FROM kitchen_tickets WHERE tenant_id=$1) +
+                    (SELECT count(*) FROM customer_order_requests WHERE tenant_id=$1) +
+                    (SELECT count(*) FROM public_menu_links WHERE tenant_id=$1) +
+                    (SELECT count(*) FROM parked_orders WHERE tenant_id=$1)
+                )::bigint AS records
+            `,[shopId]);
+            if(Number(operationalHistory.records)>0){
+                throw fail(409,'Business has retained operational records; archive the business or use the approved ledger-retention and erasure procedure.');
+            }
+
             // ========================================
             // 3. DELETE SHOP DEPENDENT RECORDS
             // ========================================
@@ -4062,6 +4083,11 @@ app.delete(
 
             const deleteOrder = [
 
+                // Read-only financial journals are protected by immutable triggers.
+                // Tenant erasure is a separately audited privileged operation; do
+                // not silently bypass the immutable ledger protection.
+                // In deployments containing operational ledger data this requires
+                // an explicit controlled retention/erasure procedure.
                 // Child records referencing orders,
                 // products or ingredients.
                 'order_items',
