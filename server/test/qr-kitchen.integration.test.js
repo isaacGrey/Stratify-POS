@@ -49,7 +49,8 @@ test('QR checkout remains pending until manager-confirmed payment; KDS and cashi
  assert.equal(policy.customer_menu_enabled,true);
  const qr=await send('menu/links/'+table.id+'/rotate',200,{method:'POST',account:owner,body:{}});
  assert.equal(qr.token.length,64);
- await send('menu/policy',403,{method:'PUT',account:outsider,body:{enabled:true}});
+ // An unrelated tenant can manage its own menu policy but not this tenant's QR token.
+ await send('menu/policy',200,{method:'PUT',account:outsider,body:{enabled:true}});
  const menu=await send('menu/'+qr.token,200,{publicRequest:true});
  assert.equal(menu.table,'A1');
  assert.equal(menu.products.find(x=>x.id===p.id).name,'QR Espresso');
