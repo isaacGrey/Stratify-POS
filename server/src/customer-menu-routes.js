@@ -153,7 +153,7 @@ export function registerCustomerMenuRoutes(app,{wrap,data,permit,need,fail,audit
   await audit(db,req,'menu.policy_updated',{enabled:req.body.enabled});
   return row;
  }));
- app.get('/api/shop/menu/requests',permit('owner','manager','cashier'),data(async(db,req)=>{
+ app.get('/api/shop/menu/requests',permit('owner','manager','cashier','staff'),data(async(db,req)=>{
   const branch=req.query.branch_id||null;
   if(branch&&!ident(branch))throw fail(400,'Invalid branch');
   return rows(db,`SELECT q.id,q.branch_id,q.table_id,q.cart,q.status,q.payment_method,
@@ -162,7 +162,7 @@ export function registerCustomerMenuRoutes(app,{wrap,data,permit,need,fail,audit
    WHERE q.tenant_id=$1 AND ($2::uuid IS NULL OR q.branch_id=$2) AND q.status<>'cancelled'
    ORDER BY q.created_at DESC LIMIT 100`,[req.tenant,branch]);
  }));
- app.post('/api/shop/menu/requests/:id/payment-review',permit('owner','manager','cashier'),data(async(db,req)=>{
+ app.post('/api/shop/menu/requests/:id/payment-review',permit('owner','manager','cashier','staff'),data(async(db,req)=>{
   if(!ident(req.params.id))throw fail(400,'Invalid request');
   const paymentReference=String(req.body?.reference||'').trim();
   if(!paymentReference||paymentReference.length>120)throw fail(400,'Enter a payment reference');
@@ -176,7 +176,7 @@ export function registerCustomerMenuRoutes(app,{wrap,data,permit,need,fail,audit
   await audit(db,req,'customer_order.payment_review',{request_id:order.id});
   return result;
  }));
- app.post('/api/shop/menu/requests/:id/cancel',permit('owner','manager','cashier'),data(async(db,req)=>{
+ app.post('/api/shop/menu/requests/:id/cancel',permit('owner','manager','cashier','staff'),data(async(db,req)=>{
   if(!ident(req.params.id))throw fail(400,'Invalid request');
   const q=await one(db,'SELECT * FROM customer_order_requests WHERE tenant_id=$1 AND id=$2 FOR UPDATE',
    [req.tenant,req.params.id]);
