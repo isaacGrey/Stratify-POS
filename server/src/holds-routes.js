@@ -31,22 +31,22 @@ export function registerHoldRoutes(app, { data, permit, need, fail, audit, ident
   }
 
   function secureToCashier(req,draft) {
-    if (req.role==='cashier' && draft.cashier_id!==req.user.id) {
+    if (['cashier','staff'].includes(req.role) && draft.cashier_id!==req.user.id) {
       throw fail(403,'This held order belongs to another cashier');
     }
   }
 
-  app.get('/api/shop/holds', permit('owner','manager','cashier'), data(async(db,req)=>{
+  app.get('/api/shop/holds', permit('owner','manager','cashier','staff'), data(async(db,req)=>{
     const branch=req.query.branch_id ?? null;
     need(!branch || ident(branch),'Invalid branch');
     return rows(db,
       "SELECT id,branch_id,cashier_id,status,order_type,table_id,items,note,created_at,updated_at " +
       "FROM parked_orders WHERE tenant_id=$1 AND status='held' AND ($2::uuid IS NULL OR branch_id=$2) " +
       'AND ($3::boolean OR cashier_id=$4) ORDER BY updated_at DESC,id DESC LIMIT 100',
-      [req.tenant,branch,req.role!=='cashier',req.user.id]);
+      [req.tenant,branch,!['cashier','staff'].includes(req.role),req.user.id]);
   }));
 
-  app.post('/api/shop/holds', permit('owner','manager','cashier'), data(async(db,req)=>{
+  app.post('/api/shop/holds', permit('owner','manager','cashier','staff'), data(async(db,req)=>{
     const hold=validDraft(req);
     const selected=await one(db,
       'SELECT id FROM branches WHERE tenant_id=$1 AND id=$2 AND active=true',
@@ -78,7 +78,7 @@ export function registerHoldRoutes(app, { data, permit, need, fail, audit, ident
     return {...previous,duplicate:true};
   }));
 
-  app.get('/api/shop/holds/:id', permit('owner','manager','cashier'),data(async(db,req)=>{
+  app.get('/api/shop/holds/:id', permit('owner','manager','cashier','staff'),data(async(db,req)=>{
     need(ident(req.params.id),'Invalid held order');
     const draft=await one(db,'SELECT * FROM parked_orders WHERE tenant_id=$1 AND id=$2',
       [req.tenant,req.params.id]);
@@ -87,7 +87,7 @@ export function registerHoldRoutes(app, { data, permit, need, fail, audit, ident
     return draft;
   }));
 
-  app.post('/api/shop/holds/:id/cancel',permit('owner','manager','cashier'),data(async(db,req)=>{
+  app.post('/api/shop/holds/:id/cancel',permit('owner','manager','cashier','staff'),data(async(db,req)=>{
     need(ident(req.params.id),'Invalid held order');
     const draft=await one(db,
       'SELECT * FROM parked_orders WHERE tenant_id=$1 AND id=$2 FOR UPDATE',
