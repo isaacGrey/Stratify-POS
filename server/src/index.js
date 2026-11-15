@@ -1151,11 +1151,10 @@ await client.query(
 
 // Public QR menu endpoints are intentionally outside authenticated workspace middleware.
 // Every public request is constrained by a random table QR token, enabled policy and a tenant-scoped DB transaction.
-registerCustomerMenuRoutes(app,{wrap,data,permit,need,fail,audit,ident});
-
 // SHOP ROUTES
 
 app.use('/api/shop', auth, tenant, enforceModule);
+registerCustomerMenuRoutes(app,{wrap,data,permit,need,fail,audit,ident});
 
 // OVERVIEW
 
