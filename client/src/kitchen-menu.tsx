@@ -147,15 +147,21 @@ export function MenuManagement({request,appOrigin}:{request:ApiRequest;appOrigin
  </>;
 }
 
-export function CustomerOrdersQueue({request}:{request:ApiRequest}) {
+export function CustomerOrdersQueue({request,role,cashierId}:{request:ApiRequest;role:string;cashierId:string}) {
  const {data,err,load}=useLoad(request,'menu/requests');
- const {data:registers}=useLoad(request,'register');
+ const {data:registers,load:reloadRegisters}=useLoad(request,'register');
+ const {data:products}=useLoad(request,'products');
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [selected,setSelected]=useState<any>(null),[verified,setVerified]=useState(false),[tender,setTender]=useState('');
  const [paymentRef,setPaymentRef]=useState('');
+ useEffect(()=>{
+   const refresh=()=>{if(!document.hidden){load();reloadRegisters();}};
+   const timer=window.setInterval(refresh,5000);
+   return()=>window.clearInterval(timer);
+ },[load,reloadRegisters]);
  async function run(fn:()=>Promise<any>){setBusy(true);setError('');setNotice('');try{await fn();load();}
  catch(e){setError(e.message||'Unable to process request');}finally{setBusy(false);}}
- const openRegister=(registers||[]).find(x=>x.status==='open'&&x.branch_id===selected?.branch_id);
+ const openRegister=(registers||[]).find(x=>x.status==='open'&&x.branch_id===selected?.branch_id&&x.cashier_id===cashierId);
  async function confirm(){
   if(!selected||!verified)return;
   const current=selected;
@@ -165,10 +171,11 @@ export function CustomerOrdersQueue({request}:{request:ApiRequest}) {
     items:current.cart,payment_method:current.payment_method,
     amount_tendered_cents:current.payment_method==='cash'?pesos(tender):null,
     register_session_id:current.payment_method==='cash'?openRegister?.id||null:null,
-    customer_request_id:current.id,payment_verified:true,client_sale_id:crypto.randomUUID()
+    customer_request_id:current.id,payment_verified:true,client_sale_id:current.id
    };
    if(payload.payment_method==='cash'&&(!openRegister||payload.amount_tendered_cents<current.quoted_total_cents))
      throw new Error('Use your open register and enter the received cash.');
+   if(!['owner','manager'].includes(role)&&current.payment_method!=='cash') throw new Error('Electronic payments require manager verification.');
    await request('checkout','POST',payload);
    setSelected(null);setVerified(false);setTender('');
    setNotice('Payment confirmed; order recorded and sent to the kitchen.');
@@ -185,19 +192,28 @@ export function CustomerOrdersQueue({request}:{request:ApiRequest}) {
   {selected&&<div className="qr-confirm-panel">
    <strong>Request at table {selected.table_label}</strong>
    <p className="operations-note">Quoted total {money(selected.quoted_total_cents)} · Current prices will be recalculated at checkout.</p>
-   <ul>{selected.cart.map((x,i)=><li key={i}>Product {String(x.product_id).slice(0,8)} · Qty {x.quantity}</li>)}</ul>
+   <ul>{selected.cart.map((x,i)=>{
+      const product=(products||[]).find(p=>p.id===x.product_id);
+      const variant=product?.variations?.find(v=>v.id===x.variation_id);
+      return <li key={i}>{product?.name||'Unavailable item'}{variant?' · '+variant.name:''} · Qty {x.quantity}</li>;
+    })}</ul>
    {selected.status==='awaiting_payment'&&<>
      <Field label="Customer payment reference or cash receipt ID"><input value={paymentRef} onChange={e=>setPaymentRef(e.target.value)} maxLength={120}/></Field>
      <Button secondary disabled={busy||!paymentRef.trim()} onClick={()=>run(async()=>{
       await request('menu/requests/'+selected.id+'/payment-review','POST',{reference:paymentRef.trim()});
-      setSelected({...selected,status:'payment_review'});setNotice('Queued for manager verification.');
+      setSelected({...selected,status:'payment_review'});setNotice('Recorded. Verify payment before completing the sale.');
      })}>Record payment reference</Button>
    </>}
    {selected.status==='payment_review'&&<>
      {selected.payment_method==='cash'&&<Field label="Cash received (PHP)"><input type="number" min="0" step=".01" value={tender} onChange={e=>setTender(e.target.value)}/></Field>}
      <label className="operations-toggle"><input type="checkbox" checked={verified} onChange={e=>setVerified(e.target.checked)}/>
-       I verified that the full customer payment was received outside this app and authorize finalizing the sale.</label>
-     <Button disabled={busy||!verified} onClick={confirm}>Confirm paid & send to kitchen</Button>
+       {selected.payment_method==='cash'
+         ? 'I received and counted the full cash payment for this customer.'
+         : 'I verified full settlement through the external payment provider.'}</label>
+     {!['owner','manager'].includes(role)&&selected.payment_method!=='cash'&&
+       <p className="flash warning">Ask an owner or manager to verify this electronic payment.</p>}
+     <Button disabled={busy||!verified||(!['owner','manager'].includes(role)&&selected.payment_method!=='cash)}
+       onClick={confirm}>Confirm paid & send to kitchen</Button>
    </>}
    <Button secondary disabled={busy} onClick={()=>setSelected(null)}>Close review</Button>
   </div>}
