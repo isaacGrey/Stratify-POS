@@ -18,6 +18,18 @@
 | 14. Public marketing website | IMPLEMENTED — responsive/client build; deployment checks pending |
 
 
+## New required POS updates — 16 November 2026
+
+**All changes remain on `Development`; not yet deployed or promoted to `main`.**
+
+- **Registered business dashboard:** separate verified subscription receipts from gross/net completed POS customer collections and cash refunds, per tenant and platform-wide; register float is excluded from customer collection totals.
+- **Dedicated employee work area:** compact cashier/staff POS, branch-aware module and server access controls. Staff only gain POS permission if configured. Cashier must open a personal register for shift checkout; another cashier can use their own session with independent float and transaction history.
+- **Customer table QR menus:** table-specific revoke/rotate tokens, sanitized public menu, pending order requests, cashier-entered cash verification and manager/manual electronic verification. Public requests cannot independently produce paid sales or kitchen tickets.
+- **Kitchen screen:** paid-only tickets and validated sequential status progression. Current near-live implementation refreshes every four seconds.
+- **CI and security:** PostgreSQL 18 migration, new QR and kitchen integration tests, existing checkout suites, TypeScript and production build. QR generation uses a locally hosted MIT component rather than leaking customer table bearer tokens to third-party QR-image servers.
+- **No actual online payment gateway:** GCash/Maya/card payment confirmation still requires physical/manual verification by owner/manager. No automated provider capture, settlement checks or webhooks. QR menu remains disabled by default pending business acceptance.
+- **Retention:** permanent deletion of a tenant with immutable operational data is blocked pending a formally approved retention/erasure pathway; administrators can archive.
+
 ## Development branch increment (14 November 2026)
 
 **This update covers verified code, not full acceptance of the 18-section commercial proposal.** See [DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md) for the full outstanding list and acceptance gates.
