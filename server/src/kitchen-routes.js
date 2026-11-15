@@ -16,7 +16,6 @@ export function registerKitchenRoutes(app, {data,permit,need,fail,audit,ident}) 
         const tickets=await rows(db, `
           SELECT k.id,k.order_id,k.branch_id,k.status,k.created_at,k.updated_at,k.completed_at,
              o.order_number,o.order_type,o.table_id,t.label AS table_label,
-             o.payment_method,o.total_cents,
              COALESCE((SELECT jsonb_agg(jsonb_build_object(
                  'name',i.product_name,'variation',i.variation_name,'quantity',i.quantity,
                  'addons',i.addons) ORDER BY i.line_position)
