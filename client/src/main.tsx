@@ -669,7 +669,7 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
 {/* KITCHEN DISPLAY — paid orders only */}
 {activePage==='kitchen' && currentShop && serverAvailable===true && <KitchenDisplay request={request}/>}
 {/* CUSTOMER QR MENUS — owner and manager only */}
-{activePage==='menu' && currentShop && serverAvailable===true && <MenuManagement request={request} appOrigin={window.location.origin}/>}
+{activePage==='menu' && currentShop && serverAvailable===true && <MenuManagement request={request} appOrigin={window.location.origin} role={role}/>}
 
 {/* PURCHASING */}
 {activePage === 'purchasing' && currentShop && serverAvailable === true && (
