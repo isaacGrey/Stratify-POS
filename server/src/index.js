@@ -23,6 +23,8 @@ import { registerRegisterRoutes } from './register-routes.js';
 import { registerPurchasingRoutes } from './purchasing-routes.js';
 import { registerRefundRoutes } from './refund-routes.js';
 import { registerHoldRoutes } from './holds-routes.js';
+import { registerCustomerMenuRoutes } from './customer-menu-routes.js';
+import { registerKitchenRoutes, enqueueKitchenTicket } from './kitchen-routes.js';
 import { loadReport, reportFilters } from './reports.js';
 import { attendanceHistory, attendanceStatus, attendanceSummary, recordAttendance } from './attendance.js';
 import { branchSchedule, saveBranchSchedule } from './branch-operations.js';
@@ -1146,6 +1148,10 @@ await client.query(
         client.release();
     }
 }));
+
+// Public QR menu endpoints are intentionally outside authenticated workspace middleware.
+// Every public request is constrained by a random table QR token, enabled policy and a tenant-scoped DB transaction.
+registerCustomerMenuRoutes(app,{wrap,data,permit,need,fail,audit,ident});
 
 // SHOP ROUTES
 
@@ -2491,6 +2497,7 @@ registerRegisterRoutes(app, operational);
 registerPurchasingRoutes(app, operational);
 registerRefundRoutes(app, operational);
 registerHoldRoutes(app, operational);
+registerKitchenRoutes(app, operational);
 
 // Transaction cost snapshots are manager/report data, not cashier receipt data.
 const publicOrder = ({ estimated_cogs_cents, ...order }) => order;
@@ -2841,6 +2848,8 @@ const checkout = quote => data(async (d, r) => {
                 estimatedCogsCents
             ]
         );
+
+        await enqueueKitchenTicket(d,r.tenant,order);
 
         for (const [position, x] of lines.entries()) {
             await d.query(
