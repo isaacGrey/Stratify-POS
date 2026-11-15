@@ -1,4 +1,5 @@
-import { randomBytes,createHash,randomUUID } from 'node:crypto';
+import { randomBytes,createHash } from 'node:crypto';
+import rateLimit from 'express-rate-limit';
 import { one, rows, pool, scoped } from './db.js';
 
 const hash=value=>createHash('sha256').update(value).digest('hex');
@@ -58,7 +59,9 @@ async function liveTotal(db,tenant,cart) {
 }
 
 export function registerCustomerMenuRoutes(app,{wrap,data,permit,need,fail,audit,ident}) {
- app.get('/api/public/menu/:token',wrap(async(req,res)=>{
+ const publicMenuReadLimit=rateLimit({windowMs:60*1000,limit:90,standardHeaders:'draft-7',legacyHeaders:false});
+ const publicMenuOrderLimit=rateLimit({windowMs:60*1000,limit:12,standardHeaders:'draft-7',legacyHeaders:false});
+ app.get('/api/public/menu/:token',publicMenuReadLimit,wrap(async(req,res)=>{
   const link=await publicMenuLimit(req.params.token);
   const menu=await scoped(link.tenant_id,async(db)=>{
    const products=await rows(db,`SELECT p.id,p.name,p.description,p.image_url,p.price_cents,
@@ -76,7 +79,7 @@ export function registerCustomerMenuRoutes(app,{wrap,data,permit,need,fail,audit
   res.json({branch:link.branch_name,table:link.table_label,products:menu.products,addons:menu.addons,
    checkout_enabled:true,payment_notice:'Orders are submitted only after cashier-confirmed payment.'});
  }));
- app.post('/api/public/menu/:token/requests',wrap(async(req,res)=>{
+ app.post('/api/public/menu/:token/requests',publicMenuOrderLimit,wrap(async(req,res)=>{
   const link=await publicMenuLimit(req.params.token);
   const cart=cleanCart(req.body?.items);
   const requestId=req.body?.request_id;
