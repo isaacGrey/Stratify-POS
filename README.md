@@ -119,3 +119,19 @@ Do not connect live business cashiers or represent receipts as official Philippi
 6. Remaining modules and edge-case tests documented in the roadmap completed.
 
 The POS is built incrementally; business-critical changes should remain on `Development` until verified. **The default `main` branch is not changed by this implementation.**
+
+## Multi-industry sales and customer memberships (Development)
+
+Database migration `029_product_classes_pos_memberships.sql` changes catalog classification to:
+
+- **Product type:** physical product, one-time service, or customer membership / subscription.
+- **Product class:** food & beverage, general merchandise, general service, or membership plan. Class choices depend on the type.
+- **Product category:** merchant-organized group. Categories do not control kitchen tickets or membership activation.
+
+Existing food/retail/service products and historical sales are migrated; existing configured service plans become membership items but are **not** automatically sold at POS until enabled. Define membership plans in Customer Memberships, specifying name, validity, price and **Sell through POS**. The plan creates and maintains a corresponding POS item. A membership checkout requires an existing customer (cashiers may register a customer while checking out), online access and one unit per plan. After a successful recorded checkout the membership is granted or extended in the same tenant-scoped PostgreSQL transaction as the sale and stock ledger, with a reference to the sale. Duplicate checkout IDs do not double-activate. Refunds are cash-only, and membership-linked sales require a full refund without later membership changes. Grant reversals revoke access; renewal reversals restore the prior expiry.
+
+Non-food carts use **Standard** checkout and never create kitchen tasks. Food & Beverage carts show Dine-in, Takeout and Delivery and only the food lines enter kitchen preparation. Public QR menus exclude general merchandise, services and memberships. Existing non-food legacy kitchen tickets are excluded from kitchen reads. Memberships cannot be sold offline or through customer QR requests. Keep offline catalogs refreshed to cache product classifications.
+
+**Cashier reception:** Cashiers may open Customer Memberships to verify names, references, status and expiry; their history view omits private reasons and customer contact notes. Only owners/managers can issue, renew, cancel or change plans. Cashiers can register a customer at POS to complete a paid membership purchase, but that does not grant membership on its own. Branch-scoped cashier read access follows existing branch restrictions. The mobile navigation scrolls independently of the main content.
+
+This is an integrated business application, not a payment gateway. Electronic payment methods are still recorded payment acknowledgments rather than externally verified charges. Automatic recurring membership billing is not included.
