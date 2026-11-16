@@ -5,6 +5,7 @@ import { Button, Empty, Field, Heading, Load, Modal, Panel, Table, fmt, money, p
 import { fetchPaymentMethods, paymentStageLabel, ReceiptSubmission, type PaymentMethod } from './billing';
 import { CashRegisterPanel, PurchasingPage, RefundDialog } from './operations';
 import { CustomerOrdersQueue, KitchenDisplay, MenuManagement, RegisterSummary } from './kitchen-menu';
+import { CustomerServices } from './customer-services';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { LayoutDashboard, Coffee, Package, ChartNoAxesCombined, Users, Settings, Store, LogOut, Plus, Search, ShoppingCart, Minus, Trash2, Receipt, ArrowRight, ChevronDown, Menu, X, Bell, Clock, CalendarDays, Tags, CreditCard, ShieldCheck, Sun, Layers, UserRound, ClipboardList, CheckCircle2, Printer, ArrowUpRight, Wallet, AlertTriangle } from 'lucide-react';
@@ -67,6 +68,7 @@ const routes: [
     ['kitchen','Kitchen Display',Coffee],
     ['menu','Customer QR Menus',ClipboardList],
     ['products', 'Products & Services', ShoppingBag],
+    ['services','Customer Memberships',CalendarDays],
     ['inventory', 'Inventory Management', Boxes],
     ['purchasing', 'Purchasing & Suppliers', ClipboardList],
     ['orders', 'Sales & Transactions', Receipt],
@@ -435,6 +437,7 @@ const visibleRoutes = routes.filter(([id]) => {
     if (id==='pos') return canSell && allowed('pos');
     if (id==='kitchen') return allowed('kitchen');
     if (id==='menu') return canManage && allowed('menu');
+    if (id==='services') return canManage && allowed('services');
     if (['branches','promotions','products','inventory','purchasing'].includes(id)) return canManage && allowed(id);
     if (id==='reports') return currentShop?.modules ? allowed(id) : canManage;
     return allowed(id);
@@ -652,6 +655,9 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
             busy={busy}
         />
 )}
+
+{/* SERVICE MEMBERSHIPS — MANUAL ENTITLEMENTS, NOT AUTOMATED BILLING */}
+{activePage === 'services' && currentShop && serverAvailable === true && canManage && <CustomerServices request={request}/>}
 
 {/* INVENTORY MANAGEMENT */}
 {activePage === 'inventory' &&

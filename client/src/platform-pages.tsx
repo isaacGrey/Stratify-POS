@@ -3,7 +3,7 @@ import type { ApiRequest } from './types';
 import { Button, Field, Load, Modal, Panel, Table, fmt, money, pesos, useLoad } from './ui';
 
 export const moduleLabels = {
-    overview: 'Dashboard', pos: 'Point of sale', kitchen: 'Kitchen display', menu: 'Customer QR menus', products: 'Products', inventory: 'Inventory', purchasing: 'Purchasing and suppliers',
+    overview: 'Dashboard', pos: 'Point of sale', services: 'Customer memberships', kitchen: 'Kitchen display', menu: 'Customer QR menus', products: 'Products', inventory: 'Inventory', purchasing: 'Purchasing and suppliers',
     orders: 'Transactions', reports: 'Reports', staff: 'Team management', attendance: 'Attendance',
     branches: 'Branches and tables', promotions: 'Promotions', settings: 'Shop settings', billing: 'Billing', audit: 'Activity'
 };

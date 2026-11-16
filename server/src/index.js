@@ -25,6 +25,7 @@ import { registerRefundRoutes } from './refund-routes.js';
 import { registerHoldRoutes } from './holds-routes.js';
 import { registerCustomerMenuRoutes } from './customer-menu-routes.js';
 import { registerKitchenRoutes, enqueueKitchenTicket } from './kitchen-routes.js';
+import { registerServiceRoutes } from './service-routes.js';
 import { loadReport, reportFilters } from './reports.js';
 import { attendanceHistory, attendanceStatus, attendanceSummary, recordAttendance } from './attendance.js';
 import { branchSchedule, saveBranchSchedule } from './branch-operations.js';
@@ -1155,6 +1156,7 @@ await client.query(
 
 app.use('/api/shop', auth, tenant, enforceModule);
 registerCustomerMenuRoutes(app,{wrap,data,permit,need,fail,audit,ident});
+registerServiceRoutes(app,{data,permit,audit,ident});
 
 // OVERVIEW
 
@@ -4064,7 +4066,9 @@ app.delete(
                     (SELECT count(*) FROM kitchen_tickets WHERE tenant_id=$1) +
                     (SELECT count(*) FROM customer_order_requests WHERE tenant_id=$1) +
                     (SELECT count(*) FROM public_menu_links WHERE tenant_id=$1) +
-                    (SELECT count(*) FROM parked_orders WHERE tenant_id=$1)
+                    (SELECT count(*) FROM parked_orders WHERE tenant_id=$1) +
+                    (SELECT count(*) FROM service_entitlements WHERE tenant_id=$1) +
+                    (SELECT count(*) FROM service_entitlement_events WHERE tenant_id=$1)
                 )::bigint AS records
             `,[shopId]);
             if(Number(operationalHistory.records)>0){
@@ -4090,6 +4094,8 @@ app.delete(
                 // an explicit controlled retention/erasure procedure.
                 // Child records referencing orders,
                 // products or ingredients.
+                'service_plans',
+                'service_customers',
                 'order_items',
                 'stock_movements',
                 'recipes',

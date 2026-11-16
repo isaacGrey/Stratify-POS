@@ -18,6 +18,14 @@
 | 14. Public marketing website | IMPLEMENTED — responsive/client build; deployment checks pending |
 
 
+## Customer services and membership tracking — 16 November 2026
+
+- Tenant-scoped customer register and service plan definitions linked to existing service products.
+- Default duration presets (1, 2, 3, 6, 12, 24 months, day-based options), custom dates and non-expiring entitlements.
+- Manual administrative issue, renew and cancel with an append-only history, role permissions and branch-scope enforcement.
+- Calendar-month arithmetic clamps month ends rather than treating a month as 30 days.
+- IMPORTANT: Issuing/renewing service access is an audited manual entitlement action, NOT a POS sale, payment capture, customer invoice or automatic recurring bill. Staff must independently verify eligibility/payment before issuing. POS-line linkage, automatic renewal billing, visit tracking, patient scheduling, notification jobs and regulated clinical-record handling are outside this increment.
+
 ## New required POS updates — 16 November 2026
 
 **All changes remain on `Development`; not yet deployed or promoted to `main`.**
