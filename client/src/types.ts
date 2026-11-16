@@ -2,7 +2,7 @@
 export type UserRole = 'owner' | 'manager' | 'cashier' | 'staff';
 export type PlanId = 'free' | 'basic' | 'premium';
 export type PaymentMethod = 'cash' | 'gcash' | 'maya' | 'card';
-export type OrderType = 'dine_in' | 'takeout' | 'delivery';
+export type OrderType = 'standard' | 'dine_in' | 'takeout' | 'delivery';
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 export interface ShopUser { id: string; name: string; email: string; }

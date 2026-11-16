@@ -437,7 +437,7 @@ const visibleRoutes = routes.filter(([id]) => {
     if (id==='pos') return canSell && allowed('pos');
     if (id==='kitchen') return allowed('kitchen');
     if (id==='menu') return canManage && allowed('menu');
-    if (id==='services') return canManage && allowed('services');
+    if (id==='services') return (canManage||role==='cashier') && allowed('services');
     if (['branches','promotions','products','inventory','purchasing'].includes(id)) return canManage && allowed(id);
     if (id==='reports') return currentShop?.modules ? allowed(id) : canManage;
     return allowed(id);
@@ -657,7 +657,7 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
 )}
 
 {/* SERVICE MEMBERSHIPS — MANUAL ENTITLEMENTS, NOT AUTOMATED BILLING */}
-{activePage === 'services' && currentShop && serverAvailable === true && canManage && <CustomerServices request={request}/>}
+{activePage === 'services' && currentShop && serverAvailable === true && (canManage||role==='cashier') && <CustomerServices request={request} readOnly={role==='cashier'}/>}
 
 {/* INVENTORY MANAGEMENT */}
 {activePage === 'inventory' &&
@@ -2282,7 +2282,7 @@ function RecipeEditor({ value, ingredients, onChange }) {
 }
 
 const emptyProduct = { name: '', description: '', price: '', cost: '', category_id: '', active: true,
-    product_type:'food_beverage',sku:'',barcode:'',brand:'',manufacturer:'',stock_item_id:'',image_url:'',
+    product_type:'physical',product_class:'general_merchandise',track_inventory:true,sku:'',barcode:'',brand:'',manufacturer:'',stock_item_id:'',image_url:'',
     variations: [], recipe: [] };
 
 function Products({ request, act, busy }) {
@@ -2315,14 +2315,15 @@ function Products({ request, act, busy }) {
             await request(modal?.id ? 'products/' + modal.id : 'products', modal?.id ? 'PUT' : 'POST', {
                 name: form.name, description: form.description, price_cents: pesos(form.price), cost_cents: pesos(form.cost),
                 category_id: form.category_id || null, active: form.active,
-                product_type:form.product_type,sku:form.sku||null,barcode:form.barcode||null,
+                product_type:form.product_type,product_class:form.product_class,track_inventory:form.track_inventory,
+                sku:form.sku||null,barcode:form.barcode||null,
                 brand:form.brand||'',manufacturer:form.manufacturer||'',
-                stock_item_id:form.product_type==='physical' ? form.stock_item_id||null : null,
+                stock_item_id:form.product_type==='physical' && form.track_inventory ? form.stock_item_id||null : null,
                 image_url:form.image_url||null,
                 variations: form.variations.map(option => ({
                     id: option.id, name: option.name, price_cents: pesos(option.price),
                     sku:option.sku||null,barcode:option.barcode||null,
-                    stock_item_id:form.product_type==='physical' ? option.stock_item_id||null : null,
+                    stock_item_id:form.product_type==='physical' && form.track_inventory ? option.stock_item_id||null : null,
                     use_custom_recipe: option.use_custom_recipe === true, recipe: option.recipe
                 })),
                 recipe: form.recipe
@@ -2341,9 +2342,12 @@ function Products({ request, act, busy }) {
                 ['name', 'Product', (_name,item)=><div className="operations-product-cell">
                     {item.image_url && <img src={item.image_url} alt="" loading="lazy" />}
                     <span><strong>{item.name}</strong><small>{item.sku || 'No SKU'}{item.barcode ? ' · '+item.barcode : ''}</small></span>
-                </div>], ['category', 'Category'], ['product_type','Type',v=>String(v).replace('_',' ')], ['price_cents', 'Base price', money],
+                </div>], ['category', 'Category'],
+                ['product_type','Type',v=>v==='service'?'One-time service':v==='membership'?'Membership':'Physical product'],
+                ['product_class','Class',v=>String(v||'').replaceAll('_',' ')],
+                ['price_cents', 'Base price', money],
                 ['active', 'Status', active => active ? 'Active' : 'Inactive'],
-                ['id', 'Actions', (_, item) => <button className="text-link" onClick={() => open(item)}>Edit</button>]
+                ['id', 'Actions', (_, item) => item.product_type==='membership'?<span>Managed in Memberships</span>:<button className="text-link" onClick={() => open(item)}>Edit</button>]
             ]} />
         </Panel>
         <Panel title="Categories" right={<div className="inline-form">
@@ -2369,11 +2373,22 @@ function Products({ request, act, busy }) {
                     <Field label="Category"><select value={form.category_id || ''} onChange={e => update('category_id', e.target.value)}>
                         <option value="">Uncategorized</option>{cats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select></Field>
-                    <Field label="Product type"><select value={form.product_type || 'food_beverage'} onChange={e=>update('product_type',e.target.value)}>
-                        <option value="food_beverage">Food & beverage</option><option value="physical">Physical / stock item</option>
-                        <option value="service">Service</option><option value="bundle">Bundle / package</option>
-                        <option value="non_stock">Non-stock item</option>
+                    <Field label="Product type"><select value={form.product_type||'physical'} onChange={e=>{
+                        const type=e.target.value;
+                        setForm(prev=>({...prev,product_type:type,
+                            product_class:type==='physical'?'general_merchandise':'general_service',
+                            track_inventory:type==='physical',stock_item_id:''}));
+                    }}>
+                        <option value="physical">Physical product</option>
+                        <option value="service">One-time service</option>
                     </select></Field>
+                    <Field label="Product class"><select value={form.product_class||'general_merchandise'} onChange={e=>update('product_class',e.target.value)}>
+                        {form.product_type==='physical'?<option value="general_merchandise">General merchandise</option>:<option value="general_service">General service</option>}
+                        <option value="food_beverage">Food & beverage (restaurant fulfillment)</option>
+                    </select></Field>
+                    {form.product_type==='physical'&&<label className="check"><input type="checkbox" checked={form.track_inventory!==false}
+                        onChange={e=>{setForm(prev=>({...prev,track_inventory:e.target.checked,
+                            stock_item_id:e.target.checked?prev.stock_item_id:''}));}}/> Track inventory</label>}
                     <Field label="SKU"><input value={form.sku||''} maxLength={64} placeholder="Generated automatically"
                         onChange={e=>update('sku',e.target.value)}/></Field>
                     <Field label="Barcode"><input value={form.barcode||''} maxLength={128} placeholder="Scan or enter code"
@@ -2386,7 +2401,7 @@ function Products({ request, act, busy }) {
                     <Field label="Manufacturer"><input value={form.manufacturer||''} maxLength={120} onChange={e=>update('manufacturer',e.target.value)}/></Field>
                     <Field label="Product photo HTTPS URL"><input type="url" value={form.image_url||''} maxLength={1024}
                         onChange={e=>update('image_url',e.target.value)} placeholder="https://example.com/product.jpg"/></Field>
-                    {form.product_type==='physical' && <Field label="Direct stock item"><select
+                    {form.product_type==='physical' && form.track_inventory && <Field label="Direct stock item"><select
                         value={form.stock_item_id||''} onChange={e=>update('stock_item_id',e.target.value)}>
                         <option value="">No direct stock tracking</option>
                         {ingredients.map(item=><option key={item.id} value={item.id}>{item.name} ({item.unit})</option>)}
@@ -2407,7 +2422,7 @@ function Products({ request, act, busy }) {
                         <button aria-label="Remove variation" onClick={() => update('variations',
                             form.variations.filter((_, row) => row !== index))}><Trash2 size={17} /></button>
                     </div>
-                    {form.product_type==='physical' && <Field label="Variation-specific stock item (optional)">
+                    {form.product_type==='physical' && form.track_inventory && <Field label="Variation-specific stock item (optional)">
                         <select value={option.stock_item_id||''} onChange={e=>updateOption(index,{stock_item_id:e.target.value})}>
                             <option value="">Use product stock item</option>
                             {ingredients.map(item=><option key={item.id} value={item.id}>{item.name} ({item.unit})</option>)}

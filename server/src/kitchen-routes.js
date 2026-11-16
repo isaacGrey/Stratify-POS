@@ -2,6 +2,11 @@ import { one, rows } from './db.js';
 
 export async function enqueueKitchenTicket(db, tenant, order) {
     if (!order || !['paid','partially_refunded','refunded'].includes(order.status)) return;
+    const food=await one(db,`SELECT 1 FROM order_items i JOIN products p
+      ON p.tenant_id=i.tenant_id AND p.id=i.product_id
+      WHERE i.tenant_id=$1 AND i.order_id=$2
+        AND COALESCE(i.product_class,p.product_class)='food_beverage' LIMIT 1`,[tenant,order.id]);
+    if(!food)return;
     await db.query(
         "INSERT INTO kitchen_tickets(tenant_id,branch_id,order_id) VALUES($1,$2,$3) " +
         "ON CONFLICT (tenant_id,order_id) DO NOTHING",
@@ -19,12 +24,19 @@ export function registerKitchenRoutes(app, {data,permit,need,fail,audit,ident}) 
              COALESCE((SELECT jsonb_agg(jsonb_build_object(
                  'name',i.product_name,'variation',i.variation_name,'quantity',i.quantity,
                  'addons',i.addons) ORDER BY i.line_position)
-                 FROM order_items i WHERE i.tenant_id=k.tenant_id AND i.order_id=k.order_id),'[]'::jsonb) AS items
+                 FROM order_items i
+                 JOIN products p ON p.tenant_id=i.tenant_id AND p.id=i.product_id
+                 WHERE i.tenant_id=k.tenant_id AND i.order_id=k.order_id
+                   AND COALESCE(i.product_class,p.product_class)='food_beverage'),'[]'::jsonb) AS items
           FROM kitchen_tickets k
           JOIN orders o ON o.tenant_id=k.tenant_id AND o.id=k.order_id
           LEFT JOIN tables t ON t.tenant_id=o.tenant_id AND t.id=o.table_id
           WHERE k.tenant_id=$1 AND ($2::uuid IS NULL OR k.branch_id=$2)
             AND o.status IN ('paid','partially_refunded','refunded')
+            AND EXISTS (SELECT 1 FROM order_items i
+               JOIN products p ON p.tenant_id=i.tenant_id AND p.id=i.product_id
+               WHERE i.tenant_id=k.tenant_id AND i.order_id=k.order_id
+                 AND COALESCE(i.product_class,p.product_class)='food_beverage')
           ORDER BY (k.status='completed') ASC,k.created_at DESC LIMIT 200`,
           [req.tenant,branch]);
         return tickets;

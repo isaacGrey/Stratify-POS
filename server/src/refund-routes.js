@@ -1,4 +1,5 @@
 import { one, rows } from './db.js';
+import {reverseMembershipCheckout} from './pos-memberships.js';
 
 export function registerRefundRoutes(app, {data,permit,need,fail,audit,ident,money}) {
     app.get('/api/shop/orders/:id/refunds', permit('owner','manager','cashier'), data(async(db,req) => {
@@ -45,6 +46,12 @@ export function registerRefundRoutes(app, {data,permit,need,fail,audit,ident,mon
             'WHERE tenant_id=$1 AND order_id=$2',[req.tenant,order.id]);
         const remaining=Number(order.total_cents)-Number(total.refunded);
         if (amount_cents>remaining) throw fail(409,'Refund exceeds the remaining paid amount');
+        const linked=await one(db,`SELECT 1 FROM service_entitlement_events
+          WHERE tenant_id=$1 AND source_order_id=$2 AND event_kind IN ('grant','renew') LIMIT 1`,
+          [req.tenant,order.id]);
+        if(linked&&(remaining!==Number(order.total_cents)||amount_cents!==remaining)){
+            throw fail(409,'A membership-linked sale requires a full refund; partial refunds are unavailable');
+        }
 
         const settings=await one(db,
             'SELECT require_cash_register FROM shop_settings WHERE tenant_id=$1',[req.tenant]);
@@ -72,6 +79,8 @@ export function registerRefundRoutes(app, {data,permit,need,fail,audit,ident,mon
             'INSERT INTO sales_refunds(tenant_id,order_id,branch_id,actor_id,request_id,amount_cents,method,reason,register_session_id) ' +
             "VALUES($1,$2,$3,$4,$5,$6,'cash',$7,$8) RETURNING *",
             [req.tenant,order.id,order.branch_id,req.user.id,request_id,amount_cents,reason.trim(),register_session_id]);
+        const reversedMemberships=linked
+            ?await reverseMembershipCheckout(db,req.tenant,order,refund,req.user.id):[];
         const status=amount_cents===remaining ? 'refunded':'partially_refunded';
         await db.query('UPDATE orders SET status=$3 WHERE tenant_id=$1 AND id=$2',
             [req.tenant,order.id,status]);
@@ -82,7 +91,7 @@ export function registerRefundRoutes(app, {data,permit,need,fail,audit,ident,mon
                 [req.tenant,order.branch_id,register.id,req.user.id,-amount_cents,reason.trim(),refund.id]);
         }
         await audit(db,req,'order.cash_refund',{
-            order_id:order.id,refund_id:refund.id,amount_cents,status,
+            order_id:order.id,refund_id:refund.id,amount_cents,status,memberships_reversed:reversedMemberships.length,
             register_session_id:register_session_id
         });
         return { ...refund,status };

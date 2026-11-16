@@ -32,7 +32,8 @@ export default function OfflinePOSGate({ tenantId, cashierId, online, request, c
             case 'branches': return [{ id: branchId, name: grant.branchName, active: true }];
             case 'products': return products.map(p => ({
                 id: p.productId, name: p.name, price_cents: p.priceCents,
-                category_id: p.categoryId, category: p.category, active: p.active, variations: p.variations ?? []
+                category_id: p.categoryId, category: p.category, product_type:p.productType,product_class:p.productClass,
+                active: p.active && p.productType!=='membership', variations: p.variations ?? []
             }));
             case 'categories': return [...new Map(products.filter(p => p.categoryId)
                 .map(p => [p.categoryId, p.category || 'General'])).entries()]
@@ -56,18 +57,21 @@ export default function OfflinePOSGate({ tenantId, cashierId, online, request, c
                     throw new Error('Reconnect and prepare the catalog to enable offline cash checkout.');
                 }
                 if (body.branch_id !== branchId || body.payment_method !== 'cash' ||
-                    !['takeout','dine_in','delivery'].includes(body.order_type)) {
+                    !['standard','takeout','dine_in','delivery'].includes(body.order_type)) {
                     throw new Error('Offline checkout requires cash at the authorized branch.');
                 }
                 if (body.table_id && (body.order_type !== 'dine_in' || !(settings.tables || []).some(table =>
                     table.id===body.table_id && ['available','reserved'].includes(table.status)))) {
                     throw new Error('This table is unavailable in the offline catalog.');
                 }
+                const foodCart=body.items.some(line=>products.some(p=>p.productId===line.product_id && p.productClass==='food_beverage'));
+                if(foodCart ? body.order_type==='standard' : body.order_type!=='standard')
+                    throw new Error('The checkout fulfillment does not match its food/beverage items.');
                 const items = body.items.map(line => {
                     const product = products.find(p => p.productId === line.product_id && p.active);
                     const variation = product?.variations?.find(v => v.id === line.variation_id);
                     const selected = addons.filter(a => a.active && line.addon_ids.includes(a.id));
-                    if (!product || (line.variation_id && !variation) || selected.length !== line.addon_ids.length) {
+                    if (!product || product.productType==='membership' || (line.variation_id && !variation) || selected.length !== line.addon_ids.length) {
                         throw new Error('An item or option is unavailable offline.');
                     }
                     const unit = (variation?.price_cents ?? product.priceCents + (variation?.price_delta_cents ?? 0)) +

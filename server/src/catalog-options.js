@@ -4,7 +4,12 @@ import { one, rows } from './db.js';
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const badRequest = message => Object.assign(new Error(message), { status: 400 });
 
-const catalogKinds = ['physical','service','food_beverage','bundle','non_stock'];
+const catalogKinds = ['physical','service','membership'];
+const catalogClasses = {
+ physical:['food_beverage','general_merchandise'],
+ service:['food_beverage','general_service'],
+ membership:['membership_plan']
+};
 const automaticSku = prefix => prefix + '-' + randomUUID().replace(/-/g,'').slice(0,12).toUpperCase();
 
 export function identifier(value,label,max=64) {
@@ -24,8 +29,18 @@ function stringField(value,label,max) {
 }
 
 export async function productOptions(db,tenant,input,existing=null) {
-    const type = input.product_type ?? existing?.product_type ?? 'food_beverage';
+    const type = input.product_type ?? existing?.product_type ?? 'physical';
     if (!catalogKinds.includes(type)) throw badRequest('Invalid product type');
+    if(type==='membership' && !existing)throw badRequest('Create membership items through Customer Memberships → Plans');
+    if(existing?.product_type==='membership')throw badRequest('Edit linked membership items through Customer Memberships → Plans');
+    // Existing API clients that omit the type created food/menu entries.
+    const legacyFoodDefault=!existing && input.product_type===undefined && input.product_class===undefined;
+    const itemClass=input.product_class ?? (type===existing?.product_type ? existing?.product_class : null)
+       ?? (legacyFoodDefault?'food_beverage':type==='physical'?'general_merchandise':type==='service'?'general_service':'membership_plan');
+    if(!catalogClasses[type].includes(itemClass))throw badRequest('Product class does not match the selected type');
+    const trackInventory=input.track_inventory ?? (type===existing?.product_type ? existing?.track_inventory : type==='physical');
+    if(typeof trackInventory!=='boolean'||(trackInventory&&type!=='physical'))
+     throw badRequest('Only physical products may track inventory');
     const sku = input.sku === undefined
         ? existing?.sku || automaticSku('P')
         : identifier(input.sku,'SKU') || existing?.sku || automaticSku('P');
@@ -39,13 +54,13 @@ export async function productOptions(db,tenant,input,existing=null) {
         !await one(db,'SELECT id FROM ingredients WHERE tenant_id=$1 AND id=$2',[tenant,stockItem]))) {
         throw badRequest('Select a valid stock item');
     }
-    if (stockItem && type !== 'physical') throw badRequest('Direct stock tracking is for physical products');
+    if (stockItem && (type !== 'physical'||!trackInventory)) throw badRequest('Direct stock tracking requires an inventory-tracked physical product');
     const image = input.image_url === undefined ? existing?.image_url ?? null : input.image_url || null;
     if (image !== null && (typeof image !== 'string' || image.length > 1024 ||
         !/^https:\/\/[A-Za-z0-9.-]+(?::\d+)?(?:[/?#][^\s]*)?$/.test(image))) {
         throw badRequest('Product image must be a valid HTTPS URL');
     }
-    return {product_type:type,sku,barcode,brand,manufacturer,stock_item_id:stockItem,image_url:image};
+    return {product_type:type,product_class:itemClass,track_inventory:trackInventory,sku,barcode,brand,manufacturer,stock_item_id:stockItem,image_url:image};
 }
 
 export const catalogConflict = error => error?.code === '23505'
@@ -55,10 +70,13 @@ export const catalogConflict = error => error?.code === '23505'
 export async function listProducts(db, tenant) {
     return rows(db, `
         SELECT p.*, c.name AS category,
+            COALESCE(sp.sell_through_pos,false) AS sell_through_pos,
+            COALESCE(sp.active,false) AS membership_plan_active,
             COALESCE(sizes.variations, '[]') AS variations,
             COALESCE(base.recipe, '[]') AS recipe
         FROM products p
         LEFT JOIN categories c ON c.tenant_id=p.tenant_id AND c.id=p.category_id
+        LEFT JOIN service_plans sp ON sp.tenant_id=p.tenant_id AND sp.product_id=p.id
         LEFT JOIN LATERAL (
             SELECT jsonb_agg(to_jsonb(v) || jsonb_build_object('recipe', COALESCE(vr.recipe, '[]'))
                 ORDER BY v.name, v.id) AS variations
@@ -128,7 +146,7 @@ export async function saveVariations(db, tenant, product, variations) {
             : identifier(variation.barcode,'variation barcode',128);
         const stockItem = variation.stock_item_id === undefined ? previous?.stock_item_id ?? null
             : variation.stock_item_id || null;
-        if (stockItem && (product.product_type !== 'physical' || !uuid.test(stockItem) ||
+        if (stockItem && (product.product_type !== 'physical' || !product.track_inventory || !uuid.test(stockItem) ||
             !await one(db,'SELECT id FROM ingredients WHERE tenant_id=$1 AND id=$2',[tenant,stockItem]))) {
             throw badRequest('Direct variation stock is only available for physical products');
         }
