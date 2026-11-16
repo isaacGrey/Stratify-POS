@@ -30,6 +30,8 @@ export interface OfflineProduct {
     variations?: { id: string; name: string; price_delta_cents: number; price_cents?: number | null }[];
 
     priceCents: number;
+    productType?: 'physical' | 'service' | 'membership';
+    productClass?: 'food_beverage' | 'general_merchandise' | 'general_service' | 'membership_plan';
     active: boolean;
 
     updatedAt: string;

@@ -36,7 +36,7 @@ async function liveTotal(db,tenant,cart) {
  const settings=await one(db,'SELECT tax_basis_points,service_basis_points FROM shop_settings WHERE tenant_id=$1',[tenant]);
  let subtotal=0;
  for(const item of cart){
-  const product=await one(db,'SELECT id,price_cents FROM products WHERE tenant_id=$1 AND id=$2 AND active=true',
+  const product=await one(db,'SELECT id,price_cents FROM products WHERE tenant_id=$1 AND id=$2 AND active=true AND product_class=\'food_beverage\'',
    [tenant,item.product_id]);
   if(!product)throw problems(409,'Product no longer available');
   let price=Number(product.price_cents);
@@ -70,7 +70,7 @@ export function registerCustomerMenuRoutes(app,{wrap,data,permit,need,fail,audit
        'price_cents',COALESCE(v.price_cents,p.price_cents+v.price_delta_cents)) ORDER BY v.name)
        FROM variations v WHERE v.tenant_id=p.tenant_id AND v.product_id=p.id),'[]'::jsonb) AS variations
      FROM products p LEFT JOIN categories c ON c.tenant_id=p.tenant_id AND c.id=p.category_id
-     WHERE p.tenant_id=$1 AND p.active=true ORDER BY p.name LIMIT 500`,[link.tenant_id]);
+     WHERE p.tenant_id=$1 AND p.active=true AND p.product_class='food_beverage' ORDER BY p.name LIMIT 500`,[link.tenant_id]);
    const addons=await rows(db,'SELECT id,name,price_cents FROM addons WHERE tenant_id=$1 AND active=true ORDER BY name LIMIT 100',
     [link.tenant_id]);
    return {products,addons};

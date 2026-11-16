@@ -4,11 +4,12 @@ import { one, rows } from './db.js';
 export function registerHoldRoutes(app, { data, permit, need, fail, audit, ident }) {
   function validDraft(req) {
     const { id, branch_id, items, order_type='takeout', table_id=null,
-      promo_code=null, loyalty_code=null, note='' } = req.body;
+      promo_code=null, loyalty_code=null, service_customer_id=null, note='' } = req.body;
     need(ident(id) && ident(branch_id) &&
       Array.isArray(items) && items.length>0 && items.length<=100 &&
-      ['dine_in','takeout','delivery'].includes(order_type) &&
+      ['standard','dine_in','takeout','delivery'].includes(order_type) &&
       (!table_id || (order_type==='dine_in' && ident(table_id))) &&
+      (!service_customer_id || ident(service_customer_id)) &&
       (promo_code===null || typeof promo_code==='string' && promo_code.length<=100) &&
       (loyalty_code===null || typeof loyalty_code==='string' && loyalty_code.length<=100) &&
       typeof note==='string' && note.length<=300, 'Invalid held order');
@@ -24,7 +25,7 @@ export function registerHoldRoutes(app, { data, permit, need, fail, audit, ident
         addon_ids:[...(item.addon_ids||[])].sort() };
     });
     const payload={ id,branch_id,items:normalized,order_type,
-      table_id:table_id||null,promo_code:promo_code||null,
+      table_id:table_id||null,service_customer_id:service_customer_id||null,promo_code:promo_code||null,
       loyalty_code:loyalty_code||null,note:note.trim() };
     const fingerprint=createHash('sha256').update(JSON.stringify(payload)).digest('hex');
     return {...payload, fingerprint};
@@ -40,7 +41,7 @@ export function registerHoldRoutes(app, { data, permit, need, fail, audit, ident
     const branch=req.query.branch_id ?? null;
     need(!branch || ident(branch),'Invalid branch');
     return rows(db,
-      "SELECT id,branch_id,cashier_id,status,order_type,table_id,items,note,created_at,updated_at " +
+      "SELECT id,branch_id,cashier_id,status,order_type,table_id,service_customer_id,items,note,created_at,updated_at " +
       "FROM parked_orders WHERE tenant_id=$1 AND status='held' AND ($2::uuid IS NULL OR branch_id=$2) " +
       'AND ($3::boolean OR cashier_id=$4) ORDER BY updated_at DESC,id DESC LIMIT 100',
       [req.tenant,branch,!['cashier','staff'].includes(req.role),req.user.id]);
@@ -52,6 +53,11 @@ export function registerHoldRoutes(app, { data, permit, need, fail, audit, ident
       'SELECT id FROM branches WHERE tenant_id=$1 AND id=$2 AND active=true',
       [req.tenant,hold.branch_id]);
     if(!selected) throw fail(404,'Branch unavailable');
+    if(hold.service_customer_id){
+      const customer=await one(db,'SELECT id FROM service_customers WHERE tenant_id=$1 AND id=$2',
+        [req.tenant,hold.service_customer_id]);
+      if(!customer)throw fail(404,'Membership customer unavailable');
+    }
     if(hold.table_id) {
       const table=await one(db,
         'SELECT id FROM tables WHERE tenant_id=$1 AND branch_id=$2 AND id=$3',
@@ -60,10 +66,10 @@ export function registerHoldRoutes(app, { data, permit, need, fail, audit, ident
     }
     const created=await one(db,
       'INSERT INTO parked_orders(id,tenant_id,branch_id,cashier_id,items,order_type,table_id,' +
-      'promo_code,loyalty_code,note,request_fingerprint) VALUES ' +
-      "($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (id) DO NOTHING RETURNING *",
+      'service_customer_id,promo_code,loyalty_code,note,request_fingerprint) VALUES ' +
+      "($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (id) DO NOTHING RETURNING *",
       [hold.id,req.tenant,hold.branch_id,req.user.id,JSON.stringify(hold.items),hold.order_type,
-        hold.table_id,hold.promo_code,hold.loyalty_code,hold.note,hold.fingerprint]);
+        hold.table_id,hold.service_customer_id,hold.promo_code,hold.loyalty_code,hold.note,hold.fingerprint]);
     if(created) {
       await audit(db,req,'order.held',{id:created.id,branch_id:created.branch_id});
       return created;

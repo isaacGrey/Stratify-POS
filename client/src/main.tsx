@@ -437,7 +437,7 @@ const visibleRoutes = routes.filter(([id]) => {
     if (id==='pos') return canSell && allowed('pos');
     if (id==='kitchen') return allowed('kitchen');
     if (id==='menu') return canManage && allowed('menu');
-    if (id==='services') return canManage && allowed('services');
+    if (id==='services') return (canManage||role==='cashier') && allowed('services');
     if (['branches','promotions','products','inventory','purchasing'].includes(id)) return canManage && allowed(id);
     if (id==='reports') return currentShop?.modules ? allowed(id) : canManage;
     return allowed(id);
@@ -657,7 +657,7 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
 )}
 
 {/* SERVICE MEMBERSHIPS — MANUAL ENTITLEMENTS, NOT AUTOMATED BILLING */}
-{activePage === 'services' && currentShop && serverAvailable === true && canManage && <CustomerServices request={request}/>}
+{activePage === 'services' && currentShop && serverAvailable === true && (canManage||role==='cashier') && <CustomerServices request={request} readOnly={role==='cashier'}/>}
 
 {/* INVENTORY MANAGEMENT */}
 {activePage === 'inventory' &&
@@ -1925,12 +1925,15 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
     const { data: tables, load: reloadTables } = useLoad(request, 'tables');
     const { data: settings, load: reloadSettings, err: settingsError } = useLoad(request, 'settings');
     const { data: promotions, load: reloadPromotions, err: promotionError } = useLoad(request, 'promotions');
+    const {data:membershipCustomers,load:reloadMembershipCustomers}=useLoad(request,!offline?'service-customers':null);
     const [branch, setBranch] = useState('');
     const {data:heldOrders,load:reloadHolds} = useLoad(request,!offline && branch ? 'holds?branch_id='+branch : null);
     const [heldOrderId,setHeldOrderId] = useState<string | null>(null);
     const [category, setCategory] = useState('all');
     const [search, setSearch] = useState('');
     const [cart, setCart] = useState([]);
+    const [membershipCustomerId,setMembershipCustomerId]=useState('');
+    const [membershipCustomerName,setMembershipCustomerName]=useState('');
     const [custom, setCustom] = useState(null);
     const [orderType, setOrderType] = useState('takeout');
     const [table, setTable] = useState('');
@@ -1946,8 +1949,9 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
         product_id: line.product.id, variation_id: line.variation?.id,
         addon_ids: line.addonList.map(a => a.id), quantity: line.qty
     }));
-    const promoKey = promo.trim();
-    const rewardKey = offline ? '' : rewardCode.trim();
+    const includesMembership=cart.some(line=>line.product.product_type==='membership');
+    const promoKey = includesMembership?'':promo.trim();
+    const rewardKey = offline || includesMembership ? '' : rewardCode.trim();
     const requiresQuote = !offline && Boolean(promoKey || rewardKey);
     const onlineQuote = useCheckoutQuote(request, requiresQuote && branch && cartPayload.length
         ? JSON.stringify({ branch_id: branch, promo_code: promoKey, loyalty_code: rewardKey, items: cartPayload }) : null, quoteVersion);
@@ -1977,7 +1981,7 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
 
     function updateQuantity(key, delta) {
         setCart(lines => lines.map(line => line.key === key
-            ? { ...line, qty: Math.min(100, line.qty + delta) } : line).filter(line => line.qty > 0));
+            ? { ...line, qty: Math.min(line.product.product_type==='membership'?1:100, line.qty + delta) } : line).filter(line => line.qty > 0));
     }
 
     function add(product, variationId = '', addonIds = []) {
@@ -1987,8 +1991,9 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
         const unit = variationPrice(product, variant) +
             addonList.reduce((sum, addon) => sum + addon.price_cents, 0);
         setCart(lines => lines.some(line => line.key === key)
-            ? lines.map(line => line.key === key ? { ...line, qty: Math.min(100, line.qty + 1) } : line)
+            ? lines.map(line => line.key === key ? { ...line, qty: Math.min(product.product_type==='membership'?1:100, line.qty + 1) } : line)
             : [...lines, { key, product, variation: variant, addonList, qty: 1, unit }]);
+        if(product.product_type==='membership'){setPromo('');setRewardCode('');}
         setCustom(null);
     }
 
@@ -2001,14 +2006,19 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
             unit: variationPrice(product, variation) + availableAddons.reduce((sum, item) => sum + item.price_cents, 0)
         } : { ...line, available };
     });
-    const cartUnavailable = pricedCart.some(line => !line.available);
+    const cartUnavailable = pricedCart.some(line => !line.available ||
+        line.product.product_type==='membership'&&(!line.product.sell_through_pos||!line.product.membership_plan_active));
     const subtotal = pricedCart.reduce((sum, line) => sum + line.qty * line.unit, 0);
+    const hasFood=pricedCart.some(line=>line.product?.product_class==='food_beverage');
+    const effectiveOrderType=hasFood?orderType:'standard';
     const totals = requiresQuote ? onlineQuote?.totals :
         checkoutTotals(subtotal, promoKey, promotions, settings.tax_basis_points, settings.service_basis_points);
     const cash = offline || method === 'cash';
     const change = totals && pesos(tender) - totals.total_cents;
     const searchTerm=search.trim().toLowerCase();
-    const filtered = products.filter(p => p.active && (category === 'all' || p.category_id === category) &&
+    const filtered = products.filter(p => p.active &&
+        (p.product_type!=='membership'||(!offline && p.sell_through_pos && p.membership_plan_active && membershipCustomers)) &&
+        (category === 'all' || p.category_id === category) &&
         (p.name.toLowerCase().includes(searchTerm) ||
             p.sku?.toLowerCase().includes(searchTerm) ||
             p.barcode?.toLowerCase().includes(searchTerm) ||
@@ -2020,9 +2030,12 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
             if (offline || unconfirmed || heldOrderId || !branch || !cart.length) {
                 throw new Error('Only a new online cart can be parked.');
             }
+            if(includesMembership && !(membershipCustomers||[]).some(c=>c.id===membershipCustomerId))
+                throw new Error('Choose a valid customer before parking a membership cart.');
             await request('holds','POST',{
-                id:crypto.randomUUID(),branch_id:branch,items:cartPayload,order_type:orderType,
-                table_id:orderType==='dine_in' ? table||null : null,
+                id:crypto.randomUUID(),branch_id:branch,items:cartPayload,order_type:effectiveOrderType,
+                table_id:hasFood&&orderType==='dine_in' ? table||null : null,
+                service_customer_id:includesMembership?membershipCustomerId:null,
                 promo_code:promoKey||null,loyalty_code:rewardKey||null
             });
             setCart([]);setPromo('');setRewardCode('');setTable('');
@@ -2052,6 +2065,7 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
             setCart(restored);
             setOrderType(draft.order_type);
             setTable(draft.table_id||'');
+            setMembershipCustomerId(draft.service_customer_id||'');
             setPromo(draft.promo_code||'');
             setRewardCode(draft.loyalty_code||'');
             setHeldOrderId(draft.id);
@@ -2073,11 +2087,16 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
             await act(async () => {
                 if (offline && unconfirmed) throw new Error('Reconnect to finish the previous checkout.');
                 if (!unconfirmed && (!branch || !totals)) throw new Error('Select a branch and confirm the order total.');
+                if (!unconfirmed && includesMembership &&
+                    !(membershipCustomers||[]).some(c=>c.id===membershipCustomerId))
+                  throw new Error('Select or register a customer before selling a membership.');
+                if(offline && includesMembership)throw new Error('Reconnect to sell customer memberships.');
                 const payload = unconfirmed || {
                     client_sale_id: crypto.randomUUID(), branch_id: branch,
                     held_order_id: !offline ? heldOrderId : null,
-                    order_type: orderType,
-                    table_id: orderType === 'dine_in' ? table || null : null,
+                    order_type: effectiveOrderType,
+                    table_id: hasFood && orderType === 'dine_in' ? table || null : null,
+                    service_customer_id: includesMembership?membershipCustomerId:null,
                     payment_method: cash ? 'cash' : method,
                     register_session_id: !offline && cash ? registerId : null,
                     amount_tendered_cents: cash ? pesos(tender) : null,
@@ -2094,6 +2113,7 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
                     reloadTables();
                     setTable('');
                     setCart([]);
+                    setMembershipCustomerId('');
                     setHeldOrderId(null);
                     reloadHolds();
                     setPromo('');
@@ -2185,17 +2205,39 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
             </section>
             <aside className="cart-panel">
                 <div className="cart-head"><h2>Order details <span>({cart.reduce((n, x) => n + x.qty, 0)})</span></h2><ShoppingCart size={21} /></div>
-                <div className="order-types">
+                {hasFood&&<div className="order-types">
                     {[['dine_in', 'Dine in'], ['takeout', 'Takeout'], ['delivery', 'Delivery']].map(([key, label]) =>
                         <button key={key} className={orderType === key ? 'on' : ''} disabled={busy || !!unconfirmed}
                             onClick={() => setOrderType(key)}>{label}</button>)}
-                </div>
-                {orderType === 'dine_in' && <select aria-label="Table" value={table} onChange={e => setTable(e.target.value)}>
+                </div>}
+                {hasFood&&pricedCart.some(line=>line.product?.product_class!=='food_beverage')&&
+                    <p className="membership-pos-hint">Restaurant fulfillment applies to food and beverage items only.</p>}
+                {includesMembership&&<div className="membership-pos-selection">
+                    <strong>Customer membership checkout</strong>
+                    <p>A paid sale automatically creates or renews the selected customer's membership. Membership plans require an online connection.</p>
+                    <Field label="Customer (required)"><select value={membershipCustomerId} disabled={busy||!!unconfirmed}
+                        onChange={e=>setMembershipCustomerId(e.target.value)}>
+                        <option value="">Select registered customer</option>
+                        {(membershipCustomers||[]).map(c=><option key={c.id} value={c.id}>{c.name}{c.reference?' · '+c.reference:''}</option>)}
+                    </select></Field>
+                    <div className="inline-form"><input aria-label="New membership customer name" maxLength={160}
+                        placeholder="New customer name" value={membershipCustomerName}
+                        onChange={e=>setMembershipCustomerName(e.target.value)} disabled={busy||!!unconfirmed}/>
+                        <Button secondary disabled={busy||!!unconfirmed||!membershipCustomerName.trim()} onClick={()=>act(async()=>{
+                            const created=await request('service-customers','POST',
+                                {name:membershipCustomerName.trim(),email:null,phone:null,reference:null,notes:''});
+                            setMembershipCustomerId(created.id);
+                            setMembershipCustomerName('');
+                            reloadMembershipCustomers();
+                        })}>Register customer</Button></div>
+                    <small className="membership-pos-hint">Membership plans are tracked separately from one-time services.</small>
+                </div>}
+                {hasFood && orderType === 'dine_in' && <select aria-label="Table" value={table} onChange={e => setTable(e.target.value)}>
                     <option value="">Select table (optional)</option>
                     {tables?.filter(t => t.branch_id === branch && ['available', 'reserved'].includes(t.status))
                         .map(t => <option key={t.id} value={t.id}>{t.label}{t.status === 'reserved' ? ' · Reserved' : ''}</option>)}
                 </select>}
-                {!offline && tables?.some(t => t.branch_id === branch && t.status === 'occupied') &&
+                {!offline && hasFood && tables?.some(t => t.branch_id === branch && t.status === 'occupied') &&
                     <details><summary>Occupied tables</summary>
                         <div className="inline-form">{tables.filter(t => t.branch_id === branch && t.status === 'occupied').map(t =>
                             <button className="text-link" key={t.id} disabled={busy} onClick={() => act(async () => {
@@ -2213,14 +2255,14 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
                         <div className="qty-control">
                             <button aria-label={'Remove one ' + x.product.name} disabled={busy || !!unconfirmed} onClick={() => updateQuantity(x.key, -1)}><Minus size={16} /></button>
                             <span>{x.qty}</span>
-                            <button aria-label={'Add one ' + x.product.name} disabled={busy || !!unconfirmed || x.qty >= 100} onClick={() => updateQuantity(x.key, 1)}><Plus size={16} /></button>
+                            <button aria-label={'Add one ' + x.product.name} disabled={busy || !!unconfirmed || x.qty >= (x.product.product_type==='membership'?1:100)} onClick={() => updateQuantity(x.key, 1)}><Plus size={16} /></button>
                         </div>
                     </div>) : <Empty text="Your cart is empty." />}
                 </div>
                 <div className="checkout-form">
                     <div className="checkout-row"><span>Subtotal</span><strong>{money(subtotal)}</strong></div>
-                    <Field label="Promo code"><input value={promo} maxLength={100} disabled={busy || !!unconfirmed} onChange={e => setPromo(e.target.value)} /></Field>
-                    {!offline && <Field label="Reward account code"><input value={rewardCode} maxLength={32} disabled={busy || !!unconfirmed}
+                    <Field label="Promo code"><input value={includesMembership?'':promo} maxLength={100} disabled={busy || !!unconfirmed || includesMembership} onChange={e => setPromo(e.target.value)} /></Field>
+                    {!offline && <Field label="Reward account code"><input value={includesMembership?'':rewardCode} maxLength={32} disabled={busy || !!unconfirmed || includesMembership}
                         onChange={e => setRewardCode(e.target.value)} /></Field>}
                     {onlineQuote?.totals?.loyalty_points != null && <p>{onlineQuote.totals.loyalty_points} points available</p>}
                     {(promoKey || rewardKey) && !totals && cart.length > 0 && <p role={offline || onlineQuote?.error ? 'alert' : 'status'}>
@@ -2245,7 +2287,7 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
                         }}>Return held order to list</button>}
                     {!offline && !heldOrderId && <Button secondary disabled={busy || !!unconfirmed ||
                         !branch || !cart.length || cartUnavailable} onClick={parkOrder}>Hold / park order</Button>}
-                    <Button onClick={checkout} disabled={busy || (unconfirmed ? offline : !branch || !cart.length || cartUnavailable || !totals || (cash && change < 0) ||
+                    <Button onClick={checkout} disabled={busy || (unconfirmed ? offline : !branch || !cart.length || cartUnavailable || !totals || (includesMembership&&!membershipCustomerId) || (cash && change < 0) ||
                         (!offline && cash && settings.require_cash_register && !registerId))}>
                         {busy ? 'Processing…' : unconfirmed ? 'Retry checkout' : offline ? 'Save cash sale' : 'Complete sale'} <ArrowRight size={18} />
                     </Button>
@@ -2282,7 +2324,7 @@ function RecipeEditor({ value, ingredients, onChange }) {
 }
 
 const emptyProduct = { name: '', description: '', price: '', cost: '', category_id: '', active: true,
-    product_type:'food_beverage',sku:'',barcode:'',brand:'',manufacturer:'',stock_item_id:'',image_url:'',
+    product_type:'physical',product_class:'general_merchandise',track_inventory:true,sku:'',barcode:'',brand:'',manufacturer:'',stock_item_id:'',image_url:'',
     variations: [], recipe: [] };
 
 function Products({ request, act, busy }) {
@@ -2315,14 +2357,15 @@ function Products({ request, act, busy }) {
             await request(modal?.id ? 'products/' + modal.id : 'products', modal?.id ? 'PUT' : 'POST', {
                 name: form.name, description: form.description, price_cents: pesos(form.price), cost_cents: pesos(form.cost),
                 category_id: form.category_id || null, active: form.active,
-                product_type:form.product_type,sku:form.sku||null,barcode:form.barcode||null,
+                product_type:form.product_type,product_class:form.product_class,track_inventory:form.track_inventory,
+                sku:form.sku||null,barcode:form.barcode||null,
                 brand:form.brand||'',manufacturer:form.manufacturer||'',
-                stock_item_id:form.product_type==='physical' ? form.stock_item_id||null : null,
+                stock_item_id:form.product_type==='physical' && form.track_inventory ? form.stock_item_id||null : null,
                 image_url:form.image_url||null,
                 variations: form.variations.map(option => ({
                     id: option.id, name: option.name, price_cents: pesos(option.price),
                     sku:option.sku||null,barcode:option.barcode||null,
-                    stock_item_id:form.product_type==='physical' ? option.stock_item_id||null : null,
+                    stock_item_id:form.product_type==='physical' && form.track_inventory ? option.stock_item_id||null : null,
                     use_custom_recipe: option.use_custom_recipe === true, recipe: option.recipe
                 })),
                 recipe: form.recipe
@@ -2341,9 +2384,12 @@ function Products({ request, act, busy }) {
                 ['name', 'Product', (_name,item)=><div className="operations-product-cell">
                     {item.image_url && <img src={item.image_url} alt="" loading="lazy" />}
                     <span><strong>{item.name}</strong><small>{item.sku || 'No SKU'}{item.barcode ? ' · '+item.barcode : ''}</small></span>
-                </div>], ['category', 'Category'], ['product_type','Type',v=>String(v).replace('_',' ')], ['price_cents', 'Base price', money],
+                </div>], ['category', 'Category'],
+                ['product_type','Type',v=>v==='service'?'One-time service':v==='membership'?'Membership':'Physical product'],
+                ['product_class','Class',v=>String(v||'').replaceAll('_',' ')],
+                ['price_cents', 'Base price', money],
                 ['active', 'Status', active => active ? 'Active' : 'Inactive'],
-                ['id', 'Actions', (_, item) => <button className="text-link" onClick={() => open(item)}>Edit</button>]
+                ['id', 'Actions', (_, item) => item.product_type==='membership'?<span>Managed in Memberships</span>:<button className="text-link" onClick={() => open(item)}>Edit</button>]
             ]} />
         </Panel>
         <Panel title="Categories" right={<div className="inline-form">
@@ -2369,11 +2415,22 @@ function Products({ request, act, busy }) {
                     <Field label="Category"><select value={form.category_id || ''} onChange={e => update('category_id', e.target.value)}>
                         <option value="">Uncategorized</option>{cats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select></Field>
-                    <Field label="Product type"><select value={form.product_type || 'food_beverage'} onChange={e=>update('product_type',e.target.value)}>
-                        <option value="food_beverage">Food & beverage</option><option value="physical">Physical / stock item</option>
-                        <option value="service">Service</option><option value="bundle">Bundle / package</option>
-                        <option value="non_stock">Non-stock item</option>
+                    <Field label="Product type"><select value={form.product_type||'physical'} onChange={e=>{
+                        const type=e.target.value;
+                        setForm(prev=>({...prev,product_type:type,
+                            product_class:type==='physical'?'general_merchandise':'general_service',
+                            track_inventory:type==='physical',stock_item_id:''}));
+                    }}>
+                        <option value="physical">Physical product</option>
+                        <option value="service">One-time service</option>
                     </select></Field>
+                    <Field label="Product class"><select value={form.product_class||'general_merchandise'} onChange={e=>update('product_class',e.target.value)}>
+                        {form.product_type==='physical'?<option value="general_merchandise">General merchandise</option>:<option value="general_service">General service</option>}
+                        <option value="food_beverage">Food & beverage (restaurant fulfillment)</option>
+                    </select></Field>
+                    {form.product_type==='physical'&&<label className="check"><input type="checkbox" checked={form.track_inventory!==false}
+                        onChange={e=>{setForm(prev=>({...prev,track_inventory:e.target.checked,
+                            stock_item_id:e.target.checked?prev.stock_item_id:''}));}}/> Track inventory</label>}
                     <Field label="SKU"><input value={form.sku||''} maxLength={64} placeholder="Generated automatically"
                         onChange={e=>update('sku',e.target.value)}/></Field>
                     <Field label="Barcode"><input value={form.barcode||''} maxLength={128} placeholder="Scan or enter code"
@@ -2386,7 +2443,7 @@ function Products({ request, act, busy }) {
                     <Field label="Manufacturer"><input value={form.manufacturer||''} maxLength={120} onChange={e=>update('manufacturer',e.target.value)}/></Field>
                     <Field label="Product photo HTTPS URL"><input type="url" value={form.image_url||''} maxLength={1024}
                         onChange={e=>update('image_url',e.target.value)} placeholder="https://example.com/product.jpg"/></Field>
-                    {form.product_type==='physical' && <Field label="Direct stock item"><select
+                    {form.product_type==='physical' && form.track_inventory && <Field label="Direct stock item"><select
                         value={form.stock_item_id||''} onChange={e=>update('stock_item_id',e.target.value)}>
                         <option value="">No direct stock tracking</option>
                         {ingredients.map(item=><option key={item.id} value={item.id}>{item.name} ({item.unit})</option>)}
@@ -2407,7 +2464,7 @@ function Products({ request, act, busy }) {
                         <button aria-label="Remove variation" onClick={() => update('variations',
                             form.variations.filter((_, row) => row !== index))}><Trash2 size={17} /></button>
                     </div>
-                    {form.product_type==='physical' && <Field label="Variation-specific stock item (optional)">
+                    {form.product_type==='physical' && form.track_inventory && <Field label="Variation-specific stock item (optional)">
                         <select value={option.stock_item_id||''} onChange={e=>updateOption(index,{stock_item_id:e.target.value})}>
                             <option value="">Use product stock item</option>
                             {ingredients.map(item=><option key={item.id} value={item.id}>{item.name} ({item.unit})</option>)}

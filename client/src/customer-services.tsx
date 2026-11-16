@@ -14,7 +14,7 @@ function DurationPicker({value,onChange}:{value:string,onChange:(v:string)=>void
   </select>
  </Field>;
 }
-function initialPlan(){return {product_id:'',name:'',description:'',duration:'months:1',custom:1};}
+function initialPlan(){return {product_id:'',name:'',description:'',duration:'months:1',custom:1,price:'999',sell_through_pos:true};}
 function initialCustomer(){return {name:'',email:'',phone:'',reference:'',notes:''};}
 function InitialGrant(){return {customer_id:'',plan_id:'',branch_id:'',start_on:today(),expiry_mode:'plan',expires_on:'',reason:''};}
 const rowStyle:React.CSSProperties={display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'};
@@ -29,13 +29,14 @@ function DateOptions({form,set}:{form:any,set:(v:any)=>void}){
   {form.expiry_mode==='custom'&&<Field label="Custom expiry date"><input type="date" min={form.start_on} value={form.expires_on} onChange={e=>set({...form,expires_on:e.target.value})}/></Field>}
  </div>;
 }
-export function CustomerServices({request}:{request:Api}){
+export function CustomerServices({request,readOnly=false}:{request:Api;readOnly?:boolean}){
  const plans=useLoad(request,'service-plans');
  const customers=useLoad(request,'service-customers');
  const entitlements=useLoad(request,'service-entitlements');
  const products=useLoad(request,'products');
  const branches=useLoad(request,'branches');
  const [tab,setTab]=useState('memberships');
+ const [lookup,setLookup]=useState('');
  const [plan,setPlan]=useState<any>(initialPlan());
  const [customer,setCustomer]=useState<any>(initialCustomer());
  const [grant,setGrant]=useState<any>(InitialGrant());
@@ -59,9 +60,13 @@ export function CustomerServices({request}:{request:Api}){
   const kind=parsed[0],amount=parsed.length===1?null:
    parsed[1]==='custom'?Number(plan.custom):Number(parsed[1]);
   if(kind!=='none'&&(!Number.isInteger(amount)||amount<1))return setError('Choose a positive whole-number duration.');
+  const priceCents=Math.round(Number(plan.price)*100);
+  if(!Number.isInteger(priceCents)||priceCents<=0||priceCents>100000000)
+   return setError('Enter a positive membership plan price.');
   await run(async()=>{
    await request(plan.id?'service-plans/'+plan.id:'service-plans',plan.id?'PUT':'POST',{
-    product_id:plan.product_id,name:plan.name,description:plan.description,
+    product_id:plan.id?plan.product_id:null,name:plan.name,description:plan.description,
+    price_cents:priceCents,sell_through_pos:plan.sell_through_pos===true,
     duration_kind:kind,duration_value:amount,active:plan.active!==false
    });
    setEditPlan(null);setPlan(initialPlan());
@@ -69,7 +74,7 @@ export function CustomerServices({request}:{request:Api}){
  }
  function openPlan(item?:any) {
   if(item){const raw=item.duration_kind==='none'?'none':item.duration_kind+':'+item.duration_value;
-   setPlan({...item,duration:presets.some(([v])=>v===raw)?raw:item.duration_kind+':custom',custom:item.duration_value||1});
+   setPlan({...item,duration:presets.some(([v])=>v===raw)?raw:item.duration_kind+':custom',custom:item.duration_value||1,price:String(Number(item.price_cents||0)/100)});
   }else setPlan(initialPlan());
   setEditPlan(true);
  }
@@ -86,13 +91,39 @@ export function CustomerServices({request}:{request:Api}){
   catch(e:any){setError(e?.message||'History unavailable');}
  }
  const activePlans=(plans.data||[]).filter((p:any)=>p.active&&p.product_active);
- const availableServices=(products.data||[]).filter((p:any)=>p.product_type==='service');
- const unconfigured=availableServices.filter((p:any)=>!(plans.data||[]).some((plan:any)=>plan.product_id===p.id));
+ const availableServices=(products.data||[]).filter((p:any)=>p.product_type==='membership');
  const records=entitlements.data||[];
+ const searched=records.filter((e:any)=>{const customer=(customers.data||[]).find((c:any)=>c.id===e.customer_id);
+  return [e.customer_name,e.plan_name,customer?.reference].join(' ').toLowerCase().includes(lookup.trim().toLowerCase());});
  const status=(item:any)=>item.effective_status==='cancelled'?'Cancelled':item.effective_status==='expired'?'Expired':
   item.starts_on&&stamp(item.starts_on)>today()?'Scheduled':'Active';
+ if(readOnly)return <>
+  <Heading title="Customer Memberships" sub="Reception verification · Read-only access. Search a customer to check whether their membership is active, scheduled, expired or cancelled."/>
+  <div style={{...surface,marginBottom:14}}>
+   <Field label="Find member by name, reference or plan"><input value={lookup} maxLength={160}
+     placeholder="Search name or member reference" onChange={e=>setLookup(e.target.value)}/></Field>
+   <p style={{fontSize:12}}>Verification only. Membership grants, renewals, cancellations and plan settings are restricted to managers and owners.</p>
+  </div>
+  <Panel title="Membership status">
+    <Table items={searched} columns={[
+      ['customer_name','Customer',(_:any,e:any)=>{const customer=(customers.data||[]).find((c:any)=>c.id===e.customer_id);
+       return <span><strong>{e.customer_name}</strong>{customer?.reference&&<small style={{display:'block'}}>{customer.reference}</small>}</span>;}],
+      ['plan_name','Plan'],['branch_name','Branch'],['starts_on','Starts',stamp],
+      ['expires_on','Expires',stamp],['effective_status','Status',(_:any,e:any)=>status(e)],
+      ['id','History',(_:any,e:any)=><Button secondary onClick={()=>openHistory(e)}>View</Button>]
+    ]}/>
+    {!searched.length&&<p style={{padding:12}}>No matching memberships.</p>}
+  </Panel>
+  {history&&<div style={surface}><div style={rowStyle}><h3>Membership history — {history.item.customer_name}</h3>
+    <Button secondary onClick={()=>setHistory(null)}>Close</Button></div>
+    <Table items={history.events} columns={[
+      ['event_kind','Event'],['starts_on','Effective',stamp],['expires_on','New expiry',stamp],
+      ['created_at','Recorded',fmt]
+    ]}/>
+  </div>}
+ </>;
  return <>
-  <Heading title="Customer services & memberships" sub="Track gym passes, clinic service packages and other time-limited or lifetime customer entitlements. Grants are manual, audited records—not payment processing."/>
+  <Heading title="Customer services & memberships" sub="Manage customer memberships, automatically linked POS plans and optional manual grants. Paid POS sales activate or renew entitlements atomically."/>
   {(error||notice)&&<p role={error?'alert':'status'} className={'flash '+(error?'error':'success')}>{error||notice}</p>}
   <div className="chip-row">
    {([['memberships','Memberships'],['customers','Customers'],['plans','Service plans']] as const).map(([key,label])=>
@@ -100,30 +131,30 @@ export function CustomerServices({request}:{request:Api}){
   </div>
   {tab==='plans'&&<>
    <Panel title="Service plans" right={<Button onClick={()=>openPlan()}>Add service plan</Button>}>
-    <p style={{padding:12}}>First create a product with type <strong>Service</strong> under Products & Services. Then configure its validity here. Editing a plan affects future grants and renewals, not existing expiry dates.</p>
+    <p style={{padding:12}}>Create a membership plan with a price, duration and optional <strong>Sell through POS</strong> setting. A linked membership product is generated automatically. Existing memberships preserve their current expiry when you edit a plan.</p>
     <Table items={plans.data||[]} columns={[
      ['name','Service plan'],['duration_kind','Default validity',(_:any,p:any)=>p.duration_kind==='none'?'Lifetime':p.duration_value+' '+p.duration_kind],
      ['price_cents','Catalog price',(v:any)=>'₱'+(Number(v||0)/100).toFixed(2)],
+     ['sell_through_pos','POS availability',(v:any)=>v?'Sellable':'Not listed'],
      ['active','Active',(v:any)=>v?'Yes':'No'],
      ['id','Actions',(_:any,p:any)=><Button secondary onClick={()=>openPlan(p)}>Edit</Button>]
     ]}/>
-    {unconfigured.length===0&&availableServices.length===0&&<p style={{padding:12}}>No service products yet. Create one in the product catalog first.</p>}
    </Panel>
    {editPlan&&<div style={surface}>
     <h3>{plan.id?'Edit service plan':'New service plan'}</h3>
     <div style={formStyle}>
-     {!plan.id&&<Field label="Service product"><select value={plan.product_id} onChange={e=>{
-      const p=unconfigured.find((p:any)=>p.id===e.target.value);
-      setPlan({...plan,product_id:e.target.value,name:p?.name||plan.name});
-     }}><option value="">Select service product</option>{unconfigured.map((p:any)=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>}
+     <Field label="Plan price (PHP)"><input type="number" min="0.01" max="1000000" step="0.01" value={plan.price}
+       onChange={e=>setPlan({...plan,price:e.target.value})}/></Field>
      <Field label="Plan name"><input value={plan.name} maxLength={160} onChange={e=>setPlan({...plan,name:e.target.value})}/></Field>
      <DurationPicker value={plan.duration} onChange={duration=>setPlan({...plan,duration})}/>
      {plan.duration.endsWith(':custom')&&<Field label="Custom duration amount"><input type="number" min={1} max={plan.duration.startsWith('months')?120:3650} step={1}
        value={plan.custom} onChange={e=>setPlan({...plan,custom:e.target.value})}/></Field>}
     </div>
     <Field label="Description"><textarea value={plan.description||''} maxLength={2000} onChange={e=>setPlan({...plan,description:e.target.value})}/></Field>
-    <label className="check"><input type="checkbox" checked={plan.active!==false} onChange={e=>setPlan({...plan,active:e.target.checked})}/> Available for new grants</label>
-    <div style={rowStyle}><Button disabled={busy||!plan.name||(!plan.id&&!plan.product_id)} onClick={savePlan}>Save service plan</Button>
+    <label className="check"><input type="checkbox" checked={plan.sell_through_pos===true}
+       onChange={e=>setPlan({...plan,sell_through_pos:e.target.checked})}/> Sell through POS (customer required at checkout)</label>
+    <label className="check"><input type="checkbox" checked={plan.active!==false} onChange={e=>setPlan({...plan,active:e.target.checked})}/> Active membership plan</label>
+    <div style={rowStyle}><Button disabled={busy||!plan.name} onClick={savePlan}>Save service plan</Button>
      <Button secondary onClick={()=>setEditPlan(null)}>Cancel</Button></div>
    </div>}
   </>}
@@ -150,7 +181,7 @@ export function CustomerServices({request}:{request:Api}){
      <h2>{records.filter((p:any)=>status(p)===key).length}</h2></div>)}
    </div>
    <Panel title="Issue a membership / service entitlement">
-    <p style={{padding:12}}>Administrative grant only. Granting or renewing does not create a POS sale or charge a customer. Confirm entitlement eligibility and payment separately.</p>
+    <p style={{padding:12}}>Manual administrative grant. POS-paid memberships appear in this same register automatically; this form does not charge the customer.</p>
     <div style={{...formStyle,padding:12}}>
      <Field label="Customer"><select value={grant.customer_id} onChange={e=>setGrant({...grant,customer_id:e.target.value})}>
       <option value="">Select customer</option>{(customers.data||[]).map((p:any)=><option key={p.id} value={p.id}>{p.name}</option>)}

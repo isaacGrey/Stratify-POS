@@ -1,4 +1,5 @@
 import {one,rows} from './db.js';
+import {randomUUID} from 'node:crypto';
 
 // Calendar-month arithmetic is anchored to the original day, then clamped to the last
 // available day of the destination month (Jan 31 + 1 month = Feb 28/29).
@@ -41,29 +42,56 @@ function expiryFor(plan,start,body) {
 }
 export function registerServiceRoutes(app,{data,permit,audit,ident}) {
  const restricted=permit('owner','manager');
- app.get('/api/shop/service-plans',restricted,data(async(db,req)=>
+ const lookup=permit('owner','manager','cashier');
+ app.get('/api/shop/service-plans',lookup,data(async(db,req)=>
    rows(db,`SELECT p.*,c.price_cents,c.active AS product_active
      FROM service_plans p JOIN products c ON c.tenant_id=p.tenant_id AND c.id=p.product_id
      WHERE p.tenant_id=$1 ORDER BY p.name,p.id`,[req.tenant])));
  app.post('/api/shop/service-plans',restricted,data(async(db,req)=>{
-  const {product_id,name,description='',duration_kind='none',duration_value=null}=req.body;
-  if(!ident(product_id)||!isText(name,1,160)||!isText(description,0,2000)||
+  const {product_id=null,name,description='',duration_kind='none',duration_value=null,
+   price_cents=null,sell_through_pos=false}=req.body;
+  if((product_id!==null&&!ident(product_id))||!isText(name,1,160)||
+     !isText(description,0,2000)||typeof sell_through_pos!=='boolean'||
      !['none','days','months'].includes(duration_kind)||
      (duration_kind==='none'?duration_value!==null:
       !Number.isInteger(duration_value)||duration_value<1||
-       duration_value>(duration_kind==='months'?120:3650)))
-   throw bad('Invalid service plan');
-  const product=await one(db,'SELECT id,product_type FROM products WHERE tenant_id=$1 AND id=$2 FOR SHARE',
-     [req.tenant,product_id]);
-  if(!product||product.product_type!=='service') throw bad('Choose an existing service product');
-  try{
-   const plan=await one(db,`INSERT INTO service_plans
-    (tenant_id,product_id,name,description,duration_kind,duration_value)
-    VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,
-    [req.tenant,product_id,name.trim(),description.trim(),duration_kind,duration_value]);
-   await audit(db,req,'service_plan.created',{id:plan.id,product_id});
-   return plan;
-  }catch(e){if(e.code==='23505')throw bad('This product already has a service plan',409);throw e;}
+       duration_value>(duration_kind==='months'?120:3650))||
+     (price_cents!==null&&(!Number.isInteger(price_cents)||price_cents<=0||price_cents>100000000))||
+     (!product_id&&price_cents===null))
+    throw bad('Invalid membership plan or price');
+  let product;
+  if(product_id){
+    product=await one(db,'SELECT * FROM products WHERE tenant_id=$1 AND id=$2 FOR UPDATE',
+      [req.tenant,product_id]);
+    if(!product||!['service','membership'].includes(product.product_type))
+     throw bad('Choose an existing service product');
+    if(product.stock_item_id)throw bad('A membership cannot consume physical stock');
+    const configured=await one(db,`SELECT
+      EXISTS (SELECT 1 FROM recipes WHERE tenant_id=$1 AND product_id=$2)
+      OR EXISTS (SELECT 1 FROM variations WHERE tenant_id=$1 AND product_id=$2)
+      AS has_options`,[req.tenant,product_id]);
+    if(configured?.has_options)throw bad('Remove service recipes and variations before converting it to a membership',409);
+    const existingPlan=await one(db,'SELECT id FROM service_plans WHERE tenant_id=$1 AND product_id=$2',
+      [req.tenant,product_id]);
+    if(existingPlan)throw bad('This product already has a service plan',409);
+    // An existing one-time service can be converted only when creating its explicit plan.
+    product=await one(db,`UPDATE products SET product_type='membership',
+      product_class='membership_plan',track_inventory=false,price_cents=$3
+      WHERE tenant_id=$1 AND id=$2 RETURNING *`,
+      [req.tenant,product_id,price_cents??product.price_cents]);
+  }else{
+    const sku='MEM-'+randomUUID().replace(/-/g,'').slice(0,12).toUpperCase();
+    product=await one(db,`INSERT INTO products
+     (tenant_id,name,description,price_cents,cost_cents,product_type,product_class,track_inventory,sku)
+     VALUES($1,$2,$3,$4,0,'membership','membership_plan',false,$5) RETURNING *`,
+     [req.tenant,name.trim(),description.trim(),price_cents,sku]);
+  }
+  const plan=await one(db,`INSERT INTO service_plans
+    (tenant_id,product_id,name,description,duration_kind,duration_value,sell_through_pos)
+    VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+    [req.tenant,product.id,name.trim(),description.trim(),duration_kind,duration_value,sell_through_pos]);
+  await audit(db,req,'service_plan.created',{id:plan.id,product_id:product.id,sell_through_pos});
+  return plan;
  }));
  app.put('/api/shop/service-plans/:id',restricted,data(async(db,req)=>{
   if(!ident(req.params.id))throw bad('Invalid service plan');
@@ -71,22 +99,31 @@ export function registerServiceRoutes(app,{data,permit,audit,ident}) {
       [req.tenant,req.params.id]);
   if(!prior)throw bad('Service plan not found',404);
   const {name=prior.name,description=prior.description,duration_kind=prior.duration_kind,
-   duration_value=prior.duration_value,active=prior.active}=req.body;
-  if(!isText(name,1,160)||!isText(description,0,2000)||typeof active!=='boolean'||
+   duration_value=prior.duration_value,active=prior.active,
+   sell_through_pos=prior.sell_through_pos,price_cents=null}=req.body;
+  if(!isText(name,1,160)||!isText(description,0,2000)||
+     typeof active!=='boolean'||typeof sell_through_pos!=='boolean'||
+     (price_cents!==null&&(!Number.isInteger(price_cents)||price_cents<=0||price_cents>100000000))||
      !['none','days','months'].includes(duration_kind)||
      (duration_kind==='none'?duration_value!==null:
       !Number.isInteger(duration_value)||duration_value<1||
        duration_value>(duration_kind==='months'?120:3650)))throw bad('Invalid service plan');
   const updated=await one(db,`UPDATE service_plans SET name=$3,description=$4,
-   duration_kind=$5,duration_value=$6,active=$7,updated_at=now()
+   duration_kind=$5,duration_value=$6,active=$7,sell_through_pos=$8,updated_at=now()
    WHERE tenant_id=$1 AND id=$2 RETURNING *`,
-   [req.tenant,prior.id,name.trim(),description.trim(),duration_kind,duration_value,active]);
-  await audit(db,req,'service_plan.updated',{id:prior.id});
+   [req.tenant,prior.id,name.trim(),description.trim(),duration_kind,duration_value,active,sell_through_pos]);
+  await db.query(`UPDATE products SET name=$3,description=$4,
+   price_cents=COALESCE($5::integer,price_cents)
+   WHERE tenant_id=$1 AND id=$2`,
+   [req.tenant,prior.product_id,name.trim(),description.trim(),price_cents]);
+  await audit(db,req,'service_plan.updated',{id:prior.id,sell_through_pos});
   return updated;
  }));
- app.get('/api/shop/service-customers',restricted,data(async(db,req)=>
-  rows(db,'SELECT * FROM service_customers WHERE tenant_id=$1 ORDER BY name,id LIMIT 1000',[req.tenant])));
- app.post('/api/shop/service-customers',restricted,data(async(db,req)=>{
+ app.get('/api/shop/service-customers',lookup,data(async(db,req)=>
+  req.role==='cashier'
+   ? rows(db,'SELECT id,name,reference FROM service_customers WHERE tenant_id=$1 ORDER BY name,id LIMIT 1000',[req.tenant])
+   : rows(db,'SELECT * FROM service_customers WHERE tenant_id=$1 ORDER BY name,id LIMIT 1000',[req.tenant])));
+ app.post('/api/shop/service-customers',permit('owner','manager','cashier'),data(async(db,req)=>{
   const {name,email=null,phone=null,reference=null,notes=''}=req.body;
   if(!isText(name,1,160)||!isText(notes,0,1000)||
    (email!==null&&(!isText(email,1,254)||!/^\S+@\S+\.\S+$/.test(email.trim())))||
@@ -119,8 +156,8 @@ export function registerServiceRoutes(app,{data,permit,audit,ident}) {
    return updated;
   }catch(e){if(e.code==='23505')throw bad('Customer reference already exists',409);throw e;}
  }));
- app.get('/api/shop/service-entitlements',restricted,data(async(db,req)=>{
-  return rows(db,`SELECT e.*,c.name AS customer_name,p.name AS plan_name,
+ app.get('/api/shop/service-entitlements',lookup,data(async(db,req)=>{
+  const result=await rows(db,`SELECT e.*,c.name AS customer_name,p.name AS plan_name,
     b.name AS branch_name,CASE WHEN e.status='cancelled' THEN 'cancelled'
      WHEN e.expires_on IS NOT NULL AND e.expires_on<CURRENT_DATE THEN 'expired'
      ELSE 'active' END AS effective_status
@@ -129,12 +166,21 @@ export function registerServiceRoutes(app,{data,permit,audit,ident}) {
     JOIN service_plans p ON p.id=e.plan_id AND p.tenant_id=e.tenant_id
     JOIN branches b ON b.id=e.branch_id AND b.tenant_id=e.tenant_id
     WHERE e.tenant_id=$1 ORDER BY e.created_at DESC,e.id DESC LIMIT 1000`,[req.tenant]);
+  return req.role==='cashier'?result.map(e=>({
+   id:e.id,customer_id:e.customer_id,plan_id:e.plan_id,branch_id:e.branch_id,
+   customer_name:e.customer_name,plan_name:e.plan_name,branch_name:e.branch_name,
+   starts_on:e.starts_on,expires_on:e.expires_on,status:e.status,
+   effective_status:e.effective_status
+  })):result;
  }));
- app.get('/api/shop/service-entitlements/:id/events',restricted,data(async(db,req)=>{
+ app.get('/api/shop/service-entitlements/:id/events',lookup,data(async(db,req)=>{
   if(!ident(req.params.id))throw bad('Invalid membership');
   const membership=await one(db,'SELECT id FROM service_entitlements WHERE tenant_id=$1 AND id=$2',
    [req.tenant,req.params.id]);
   if(!membership)throw bad('Membership not found',404);
+  if(req.role==='cashier')return rows(db,`SELECT event_kind,starts_on,expires_on,created_at,source_order_id
+   FROM service_entitlement_events WHERE tenant_id=$1 AND entitlement_id=$2
+   ORDER BY created_at,id`,[req.tenant,req.params.id]);
   return rows(db,`SELECT v.*,u.name AS actor_name FROM service_entitlement_events v
    JOIN users u ON u.id=v.actor_id WHERE v.tenant_id=$1 AND v.entitlement_id=$2
    ORDER BY v.created_at,v.id`,[req.tenant,req.params.id]);

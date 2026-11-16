@@ -2,10 +2,10 @@ export const modules = ['overview','pos','products','inventory','purchasing','or
 const defaultModules = {
     owner: modules,
     manager: modules,
-    cashier: ['pos','orders','attendance','kitchen'],
+    cashier: ['pos','orders','attendance','kitchen','services'],
     staff: ['attendance','kitchen']
 };
-const workspaceWide = ['staff','settings','billing','audit','services'];
+const workspaceWide = ['staff','settings','billing','audit'];
 
 export function moduleAccess(row) {
     const defaults = defaultModules[row.role] || [];
@@ -37,8 +37,9 @@ export function canUseRoute(path, method, access, branchIds) {
             if (key==='requests') return allow('pos');
             return false;
         case 'service-plans':
+        case 'service-entitlements': return allow('services') && (read || fullWorkspace);
         case 'service-customers':
-        case 'service-entitlements': return fullWorkspace && allow('services');
+            return allow('services') && (read || fullWorkspace || (method==='POST' && allow('pos')));
         case 'purchases': return allow('purchasing');
         case 'overview': return allow('overview');
         case 'orders': return allow('orders');

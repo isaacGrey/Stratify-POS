@@ -5171,3 +5171,16 @@ td strong,.metric>strong,.product-name,.cart-head h2,.total-row strong {color:va
  .public-menu-footer { grid-template-columns:1fr; }
  .kds-grid { grid-template-columns:1fr; }
 }
+
+/* Compact scrollable navigation, including short iOS/Android viewport sizes. */
+.sidebar{height:100vh;height:100dvh;min-height:0;overflow:hidden}
+.sidebar nav{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:thin}
+.sidebar-bottom{flex:0 0 auto;padding-bottom:env(safe-area-inset-bottom)}
+.sidebar .brand,.sidebar .workspace,.sidebar .side-label{flex-shrink:0}
+@media(max-width:850px){.sidebar{height:100dvh;max-height:100dvh;width:min(85vw,290px)}}
+@media(max-height:570px){.sidebar .support{display:none}.sidebar{padding-top:10px}.brand{padding-bottom:12px}.workspace{margin-bottom:12px}}
+.membership-pos-selection{padding:13px;margin:12px 0;border-radius:10px;background:#f4faf8;border:1px solid #d7e9e5}
+.membership-pos-selection p{font-size:12px;color:#45655f;margin:4px 0 10px}
+.membership-pos-selection select{width:100%;min-height:40px}
+.membership-pos-selection label{font-size:12px}
+.membership-pos-hint{font-size:11px;color:#58736d}

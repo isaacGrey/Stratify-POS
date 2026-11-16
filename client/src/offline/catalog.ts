@@ -97,6 +97,8 @@ export async function syncOfflineCatalog(
                 variations: product.variations,
 
                 priceCents: Number(product.price_cents),
+                productType: product.product_type,
+                productClass: product.product_class,
 
                 active: product.active === true,
 

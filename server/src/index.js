@@ -26,6 +26,7 @@ import { registerHoldRoutes } from './holds-routes.js';
 import { registerCustomerMenuRoutes } from './customer-menu-routes.js';
 import { registerKitchenRoutes, enqueueKitchenTicket } from './kitchen-routes.js';
 import { registerServiceRoutes } from './service-routes.js';
+import {validateMembershipCart,fulfillMembershipCheckout} from './pos-memberships.js';
 import { loadReport, reportFilters } from './reports.js';
 import { attendanceHistory, attendanceStatus, attendanceSummary, recordAttendance } from './attendance.js';
 import { branchSchedule, saveBranchSchedule } from './branch-operations.js';
@@ -1439,16 +1440,17 @@ app.post(
         }
 
         const extras = await productOptions(d,r.tenant,r.body);
+        need(extras.track_inventory || recipe.length===0,'Non-stock items cannot have inventory-consuming recipes');
         let p;
         try {
             p = await one(d,
                 `INSERT INTO products
                  (tenant_id,name,price_cents,cost_cents,category_id,description,active,
-                  product_type,sku,barcode,brand,manufacturer,stock_item_id,image_url)
-                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                  product_type,product_class,track_inventory,sku,barcode,brand,manufacturer,stock_item_id,image_url)
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
                  RETURNING *`,
                 [r.tenant,name.trim(),price_cents,cost_cents,category_id,description,active,
-                    extras.product_type,extras.sku,extras.barcode,extras.brand,extras.manufacturer,
+                    extras.product_type,extras.product_class,extras.track_inventory,extras.sku,extras.barcode,extras.brand,extras.manufacturer,
                     extras.stock_item_id,extras.image_url]);
         } catch (error) { throw catalogConflict(error); }
 
@@ -1493,17 +1495,37 @@ app.put(
             [r.params.id,r.tenant]);
         if (!previous) throw fail(404, 'Product unavailable');
         const extras = await productOptions(d,r.tenant,r.body,previous);
+        if(recipe!==undefined)need(extras.track_inventory || recipe.length===0,
+          'Non-stock items cannot have inventory-consuming recipes');
+        if(!extras.track_inventory){
+          if(recipe===undefined){
+            const existingRecipe=await one(d,
+              'SELECT 1 FROM recipes WHERE tenant_id=$1 AND product_id=$2 LIMIT 1',
+              [r.tenant,previous.id]);
+            if(existingRecipe)throw fail(409,'Remove the existing recipe before disabling inventory tracking');
+          }
+          if(variations===undefined){
+            const existingVariation=await one(d,`SELECT 1 FROM variations v
+              WHERE v.tenant_id=$1 AND v.product_id=$2 AND
+              (v.stock_item_id IS NOT NULL OR EXISTS
+               (SELECT 1 FROM variation_recipes vr WHERE vr.tenant_id=v.tenant_id
+                 AND vr.variation_id=v.id)) LIMIT 1`,[r.tenant,previous.id]);
+            if(existingVariation)throw fail(409,'Remove variation stock links before disabling inventory tracking');
+          }else if(variations.some(v=>v.stock_item_id||v.use_custom_recipe||v.recipe?.length)){
+            throw fail(400,'Remove variation stock links and recipes before disabling inventory tracking');
+          }
+        }
         let p;
         try {
             p = await one(d,
                 `UPDATE products
                  SET name=$1,price_cents=$2,cost_cents=$3,
                      category_id=$4,description=$5,active=$6,
-                     product_type=$9,sku=$10,barcode=$11,brand=$12,
-                     manufacturer=$13,stock_item_id=$14,image_url=$15
+                     product_type=$9,product_class=$10,track_inventory=$11,sku=$12,barcode=$13,brand=$14,
+                     manufacturer=$15,stock_item_id=$16,image_url=$17
                  WHERE id=$7 AND tenant_id=$8 RETURNING *`,
                 [name.trim(),price_cents,cost_cents,category_id,description,active,
-                 r.params.id,r.tenant,extras.product_type,extras.sku,extras.barcode,
+                 r.params.id,r.tenant,extras.product_type,extras.product_class,extras.track_inventory,extras.sku,extras.barcode,
                  extras.brand,extras.manufacturer,extras.stock_item_id,extras.image_url]);
         } catch (error) { throw catalogConflict(error); }
 
@@ -2509,12 +2531,13 @@ const checkout = quote => data(async (d, r) => {
         const {
             branch_id,
             items,
-            order_type = 'takeout',
+            order_type = null,
             table_id = null,
             payment_method = 'cash',
             amount_tendered_cents = null,
             promo_code = null,
-            loyalty_code = null
+            loyalty_code = null,
+            service_customer_id = null
         } = r.body;
 
         need(
@@ -2526,7 +2549,7 @@ const checkout = quote => data(async (d, r) => {
         );
 
         need(
-            ['dine_in', 'takeout', 'delivery'].includes(order_type) &&
+            [null,'standard','dine_in', 'takeout', 'delivery'].includes(order_type) &&
             ['cash', 'gcash', 'maya', 'card'].includes(payment_method),
             'Invalid order type/payment'
         );
@@ -2557,7 +2580,12 @@ const checkout = quote => data(async (d, r) => {
                 const savedItems = await rows(d,
                     'SELECT product_name AS name, variation_name AS variation, addons, quantity, total_cents FROM order_items WHERE tenant_id=$1 AND order_id=$2 ORDER BY line_position, id',
                     [r.tenant, existing.id]);
-                return { ...publicOrder(existing), items: savedItems };
+                const memberships=await rows(d,`SELECT e.id AS entitlement_id,e.plan_id,
+                    ev.event_kind,ev.expires_on,e.customer_id FROM service_entitlement_events ev
+                    JOIN service_entitlements e ON e.tenant_id=ev.tenant_id AND e.id=ev.entitlement_id
+                    WHERE ev.tenant_id=$1 AND ev.source_order_id=$2 AND ev.event_kind IN ('grant','renew')`,
+                    [r.tenant,existing.id]);
+                return { ...publicOrder(existing), items: savedItems, memberships };
             }
         }
 
@@ -2593,6 +2621,8 @@ const checkout = quote => data(async (d, r) => {
             if (!heldOrder) throw fail(404,'Held order unavailable');
             if (heldOrder.status !== 'held') throw fail(409,'This held order was already finalized or cancelled');
             if (heldOrder.branch_id !== branch_id) throw fail(409,'Held order belongs to another branch');
+            if ((heldOrder.service_customer_id||null)!==(service_customer_id||null))
+              throw fail(409,'Held order customer has changed; start a new checkout');
             if (r.role === 'cashier' && heldOrder.cashier_id !== r.user.id) {
                 throw fail(403,'This held order belongs to another cashier');
             }
@@ -2720,7 +2750,7 @@ const checkout = quote => data(async (d, r) => {
                 total
             });
 
-            const recipe = await rows(
+            const recipe = p.track_inventory ? await rows(
                 d,
                 `SELECT ingredient_id,quantity FROM recipes
                  WHERE product_id=$1 AND tenant_id=$2 AND NOT $3::boolean
@@ -2731,10 +2761,10 @@ const checkout = quote => data(async (d, r) => {
                  SELECT ingredient_id,quantity FROM addon_recipes
                  WHERE addon_id=ANY($5::uuid[]) AND tenant_id=$2`,
                 [p.id, r.tenant, variant?.use_custom_recipe ?? false, variant?.id ?? null, addons.map(a => a.id)]
-            );
+            ) : [];
             // When ingredients are consumed, capture their actual unit costs.
             // Otherwise preserve the catalog product cost at the instant of sale.
-            const directStockId = p.product_type === 'physical'
+            const directStockId = p.product_type === 'physical' && p.track_inventory
                 ? variant?.stock_item_id || p.stock_item_id : null;
             if (directStockId) {
                 if (recipe.some(row=>row.ingredient_id===directStockId)) {
@@ -2752,6 +2782,21 @@ const checkout = quote => data(async (d, r) => {
             }
         }
 
+        // Restaurant fulfillment applies only to explicitly classified food/beverage lines.
+        const hasFood=lines.some(line=>line.product.product_class==='food_beverage');
+        // Signed cash receipts prepared by the previous POS release used "takeout"
+        // even for retail; retain their reconciliation without creating restaurant sales.
+        const legacyOfflineStandard=Boolean(grant)&&!hasFood&&order_type==='takeout';
+        const effectiveOrderType=legacyOfflineStandard?'standard':
+          order_type ?? (hasFood?'takeout':'standard');
+        if(hasFood ? effectiveOrderType==='standard' : effectiveOrderType!=='standard')
+          throw fail(400,'Choose restaurant fulfillment only when the cart contains food or beverage');
+        if(!hasFood && table_id)throw fail(400,'Only food/beverage orders can use restaurant tables');
+        const membershipSelections=await validateMembershipCart(d,r.tenant,lines,{
+          customerId:service_customer_id,offline:Boolean(offline),held:Boolean(heldOrder),
+          qr:Boolean(customerRequest),promo:promo_code,loyalty:loyalty_code});
+        if(membershipSelections.length && !r.modules.services)
+          throw fail(403,'Customer Memberships module is unavailable to this workspace');
         // Inventory deduction inside same transaction
 
         const sortedConsumption = [...consumption.entries()]
@@ -2849,22 +2894,23 @@ const checkout = quote => data(async (d, r) => {
             d,
             `INSERT INTO orders
              (
-                tenant_id,branch_id,cashier_id,order_type,table_id,
+                tenant_id,branch_id,cashier_id,order_type,table_id,service_customer_id,
                 subtotal_cents,discount_cents,tax_cents,service_cents,
                 total_cents,payment_method,amount_tendered_cents,
                 change_cents,promo_code,client_sale_id,checkout_fingerprint,offline_device_id,
                 created_at,synced_at,receipt_footer,promotion_id,loyalty_account_id,register_session_id,estimated_cogs_cents
              )
              VALUES
-             ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-              COALESCE($18::timestamptz, now()), CASE WHEN $17::uuid IS NOT NULL THEN now() END,$19,$20,$21,$22,$23)
+             ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
+              COALESCE($19::timestamptz, now()), CASE WHEN $18::uuid IS NOT NULL THEN now() END,$20,$21,$22,$23,$24)
              RETURNING *`,
             [
                 r.tenant,
                 branch_id,
                 cashierId,
-                order_type,
+                effectiveOrderType,
                 table_id,
+                service_customer_id,
                 subtotal,
                 discount,
                 tax,
@@ -2889,17 +2935,15 @@ const checkout = quote => data(async (d, r) => {
             );
             await audit(d,r,'customer_order.payment_confirmed',{request_id:customerRequest.id,order_id:order.id,method:payment_method});
         }
-        await enqueueKitchenTicket(d,r.tenant,order);
-
         for (const [position, x] of lines.entries()) {
             await d.query(
                 `INSERT INTO order_items
                  (
                     tenant_id,order_id,product_id,product_name,
                     variation_name,addons,quantity,
-                    unit_price_cents,total_cents,line_position,variation_id
+                    unit_price_cents,total_cents,line_position,variation_id,product_class
                  )
-                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
                 [
                     r.tenant,
                     order.id,
@@ -2909,11 +2953,16 @@ const checkout = quote => data(async (d, r) => {
                     JSON.stringify(x.addons),
                     x.qty,
                     x.unit,
-                    x.total, position, x.variant?.id ?? null
+                    x.total, position, x.variant?.id ?? null, x.product.product_class
                 ]
             );
         }
 
+        // A paid membership activation is part of the very same transaction as this sale.
+        // Any failure rolls back payment ledger, stock changes, and the entitlement.
+        const membershipResults=await fulfillMembershipCheckout(
+          d,r.tenant,order,service_customer_id,membershipSelections,r.user.id);
+        await enqueueKitchenTicket(d,r.tenant,order);
         for (const component of costComponents) {
             await d.query(
                 'INSERT INTO order_cost_components(tenant_id,branch_id,order_id,source_kind,source_id,quantity,unit_cost_cents,extended_cost_cents) ' +
@@ -2956,6 +3005,7 @@ const checkout = quote => data(async (d, r) => {
 
         return {
             ...publicOrder(order),
+            memberships:membershipResults,
             items: lines.map(x => ({
                 name: x.product.name,
                 variation: x.variant?.name,
