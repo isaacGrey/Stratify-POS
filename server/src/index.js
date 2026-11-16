@@ -1497,6 +1497,24 @@ app.put(
         const extras = await productOptions(d,r.tenant,r.body,previous);
         if(recipe!==undefined)need(extras.track_inventory || recipe.length===0,
           'Non-stock items cannot have inventory-consuming recipes');
+        if(!extras.track_inventory){
+          if(recipe===undefined){
+            const existingRecipe=await one(d,
+              'SELECT 1 FROM recipes WHERE tenant_id=$1 AND product_id=$2 LIMIT 1',
+              [r.tenant,previous.id]);
+            if(existingRecipe)throw fail(409,'Remove the existing recipe before disabling inventory tracking');
+          }
+          if(variations===undefined){
+            const existingVariation=await one(d,`SELECT 1 FROM variations v
+              WHERE v.tenant_id=$1 AND v.product_id=$2 AND
+              (v.stock_item_id IS NOT NULL OR EXISTS
+               (SELECT 1 FROM variation_recipes vr WHERE vr.tenant_id=v.tenant_id
+                 AND vr.variation_id=v.id)) LIMIT 1`,[r.tenant,previous.id]);
+            if(existingVariation)throw fail(409,'Remove variation stock links before disabling inventory tracking');
+          }else if(variations.some(v=>v.stock_item_id||v.use_custom_recipe||v.recipe?.length)){
+            throw fail(400,'Remove variation stock links and recipes before disabling inventory tracking');
+          }
+        }
         let p;
         try {
             p = await one(d,
@@ -2563,7 +2581,7 @@ const checkout = quote => data(async (d, r) => {
                     'SELECT product_name AS name, variation_name AS variation, addons, quantity, total_cents FROM order_items WHERE tenant_id=$1 AND order_id=$2 ORDER BY line_position, id',
                     [r.tenant, existing.id]);
                 const memberships=await rows(d,`SELECT e.id AS entitlement_id,e.plan_id,
-                    ev.event_kind,e.expires_on,e.customer_id FROM service_entitlement_events ev
+                    ev.event_kind,ev.expires_on,e.customer_id FROM service_entitlement_events ev
                     JOIN service_entitlements e ON e.tenant_id=ev.tenant_id AND e.id=ev.entitlement_id
                     WHERE ev.tenant_id=$1 AND ev.source_order_id=$2 AND ev.event_kind IN ('grant','renew')`,
                     [r.tenant,existing.id]);
@@ -2766,13 +2784,19 @@ const checkout = quote => data(async (d, r) => {
 
         // Restaurant fulfillment applies only to explicitly classified food/beverage lines.
         const hasFood=lines.some(line=>line.product.product_class==='food_beverage');
-        const effectiveOrderType=order_type ?? (hasFood?'takeout':'standard');
+        // Signed cash receipts prepared by the previous POS release used "takeout"
+        // even for retail; retain their reconciliation without creating restaurant sales.
+        const legacyOfflineStandard=Boolean(grant)&&!hasFood&&order_type==='takeout';
+        const effectiveOrderType=legacyOfflineStandard?'standard':
+          order_type ?? (hasFood?'takeout':'standard');
         if(hasFood ? effectiveOrderType==='standard' : effectiveOrderType!=='standard')
           throw fail(400,'Choose restaurant fulfillment only when the cart contains food or beverage');
         if(!hasFood && table_id)throw fail(400,'Only food/beverage orders can use restaurant tables');
         const membershipSelections=await validateMembershipCart(d,r.tenant,lines,{
           customerId:service_customer_id,offline:Boolean(offline),held:Boolean(heldOrder),
           qr:Boolean(customerRequest),promo:promo_code,loyalty:loyalty_code});
+        if(membershipSelections.length && !r.modules.services)
+          throw fail(403,'Customer Memberships module is unavailable to this workspace');
         // Inventory deduction inside same transaction
 
         const sortedConsumption = [...consumption.entries()]

@@ -77,6 +77,29 @@ test('multi-industry sales, cashier reception lookup and atomic POS membership l
   name:'Stock service',product_type:'service',product_class:'general_service',
   track_inventory:true,price_cents:1000
  },owner);
+ const configuredService=await post('shop/products',200,{
+  name:'Configured treatment',product_type:'service',product_class:'general_service',
+  track_inventory:false,price_cents:12000,variations:[{name:'Extended',price_cents:16000}]
+ },owner);
+ await post('shop/service-plans',409,{
+  product_id:configuredService.id,name:'Unsafe conversion',duration_kind:'months',
+  duration_value:1,sell_through_pos:true
+ },owner);
+ const configuredAfter=(await request('shop/products',200,{account:owner}))
+  .find(p=>p.id===configuredService.id);
+ assert.equal(configuredAfter.product_type,'service','Rejected plan conversion must not alter the product');
+ const stockComponent=await post('shop/ingredients',200,{
+  name:'Membership test consumable',unit:'g',quantity:10,unit_cost_cents:20
+ },owner);
+ const recipeItem=await post('shop/products',200,{
+  name:'Prepared testing item',product_type:'physical',product_class:'food_beverage',
+  track_inventory:true,price_cents:1500,
+  recipe:[{ingredient_id:stockComponent.id,quantity:1}]
+ },owner);
+ const recipeItemBase={name:'Prepared testing item',product_type:'physical',
+  product_class:'food_beverage',price_cents:1500,track_inventory:false};
+ await put('shop/products/'+recipeItem.id,409,recipeItemBase,owner);
+ await put('shop/products/'+recipeItem.id,200,{...recipeItemBase,recipe:[]},owner);
  const all=await request('shop/products',200,{account:owner});
  assert.equal(all.find(p=>p.id===food.id).product_class,'food_beverage');
  assert.equal(all.find(p=>p.id===retail.id).product_class,'general_merchandise');
@@ -198,6 +221,9 @@ test('multi-industry sales, cashier reception lookup and atomic POS membership l
  const renewedRow=(await request('shop/service-entitlements',200,{account:owner}))
    .find(e=>e.id===initial.id);
  assert.equal(String(renewedRow.expires_on).slice(0,10),expiryFrom(firstExpiry,'months',1));
+ const initialRetryAfterRenewal=await post('shop/checkout',200,firstPayload,cashier);
+ assert.equal(String(initialRetryAfterRenewal.memberships[0].expires_on).slice(0,10),firstExpiry,
+  'Idempotent receipt must use its own historical expiry, not a later renewal');
 
  // Refunding older grant after a renewal, or partially refunding a member sale, fails atomically.
  const refund=(orderId,requestId,amount)=>({

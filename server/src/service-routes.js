@@ -66,6 +66,11 @@ export function registerServiceRoutes(app,{data,permit,audit,ident}) {
     if(!product||!['service','membership'].includes(product.product_type))
      throw bad('Choose an existing service product');
     if(product.stock_item_id)throw bad('A membership cannot consume physical stock');
+    const configured=await one(db,`SELECT
+      EXISTS (SELECT 1 FROM recipes WHERE tenant_id=$1 AND product_id=$2)
+      OR EXISTS (SELECT 1 FROM variations WHERE tenant_id=$1 AND product_id=$2)
+      AS has_options`,[req.tenant,product_id]);
+    if(configured?.has_options)throw bad('Remove service recipes and variations before converting it to a membership',409);
     const existingPlan=await one(db,'SELECT id FROM service_plans WHERE tenant_id=$1 AND product_id=$2',
       [req.tenant,product_id]);
     if(existingPlan)throw bad('This product already has a service plan',409);

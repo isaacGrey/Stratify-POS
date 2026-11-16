@@ -2030,6 +2030,8 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
             if (offline || unconfirmed || heldOrderId || !branch || !cart.length) {
                 throw new Error('Only a new online cart can be parked.');
             }
+            if(includesMembership && !(membershipCustomers||[]).some(c=>c.id===membershipCustomerId))
+                throw new Error('Choose a valid customer before parking a membership cart.');
             await request('holds','POST',{
                 id:crypto.randomUUID(),branch_id:branch,items:cartPayload,order_type:effectiveOrderType,
                 table_id:hasFood&&orderType==='dine_in' ? table||null : null,
