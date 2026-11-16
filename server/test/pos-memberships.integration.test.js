@@ -241,10 +241,39 @@ test('multi-industry sales, cashier reception lookup and atomic POS membership l
  const forMixed=tickets.find(ticket=>ticket.order_id===mixed.id);
  assert.deepEqual(forMixed.items.map(i=>i.name),['Club sandwich']);
  assert.ok(!tickets.some(ticket=>ticket.items.some(i=>i.name==='Gym Monthly')));
+ // Concurrent paid checkouts are serialized per customer + plan.
+ const parallelCustomer=await post('shop/service-customers',200,{name:'Concurrent renewal customer'},owner);
+ const concurrentIds=[randomUUID(),randomUUID()];
+ const parallel=await Promise.all(concurrentIds.map(id=>
+   post('shop/checkout',200,checkout(id,membershipItems,{
+     order_type:'standard',service_customer_id:parallelCustomer.id,
+     amount_tendered_cents:150000
+   }),cashier)));
+ assert.equal(new Set(parallel.map(p=>p.id)).size,2,'Distinct paid checkouts each create a sale');
+ assert.equal(parallel.every(p=>p.memberships.length===1),true);
+ const parallelEntitlements=(await request('shop/service-entitlements',200,{account:owner}))
+  .filter(e=>e.customer_id===parallelCustomer.id&&e.plan_id===gym.id);
+ assert.equal(parallelEntitlements.length,1,'Concurrent checkouts cannot create two active memberships');
+ const parallelEvents=await request('shop/service-entitlements/'+parallelEntitlements[0].id+'/events',
+   200,{account:owner});
+ assert.deepEqual(parallelEvents.map(e=>e.event_kind),['grant','renew']);
+ // Duplicate idempotency keys may also race; neither the sale nor its entitlement should repeat.
+ const retryCustomer=await post('shop/service-customers',200,{name:'Retry customer'},owner);
+ const retryPayload=checkout(randomUUID(),membershipItems,{
+   order_type:'standard',service_customer_id:retryCustomer.id,amount_tendered_cents:150000
+ });
+ const retriedConcurrent=await Promise.all([0,1].map(()=>
+   post('shop/checkout',200,retryPayload,cashier)));
+ assert.equal(retriedConcurrent[0].id,retriedConcurrent[1].id);
+ const retryMemberships=(await request('shop/service-entitlements',200,{account:owner}))
+  .filter(e=>e.customer_id===retryCustomer.id&&e.plan_id===gym.id);
+ assert.equal(retryMemberships.length,1);
+ assert.equal((await request('shop/service-entitlements/'+retryMemberships[0].id+'/events',
+   200,{account:owner})).length,1);
  // Another business cannot access the membership or checkout records.
  await request('shop/service-entitlements',200,{account:stranger});
  await request('shop/service-entitlements/'+initial.id+'/events',404,{account:stranger});
- await post('shop/checkout',404,checkout(randomUUID(),membershipItems,{
+ await post('shop/checkout',400,checkout(randomUUID(),membershipItems,{
   order_type:'standard',branch_id:otherBranch.id,service_customer_id:customer.id
  }),stranger);
 });
