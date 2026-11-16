@@ -37,8 +37,9 @@ export function canUseRoute(path, method, access, branchIds) {
             if (key==='requests') return allow('pos');
             return false;
         case 'service-plans':
-        case 'service-customers':
         case 'service-entitlements': return allow('services') && (read || fullWorkspace);
+        case 'service-customers':
+            return allow('services') && (read || fullWorkspace || (method==='POST' && allow('pos')));
         case 'purchases': return allow('purchasing');
         case 'overview': return allow('overview');
         case 'orders': return allow('orders');

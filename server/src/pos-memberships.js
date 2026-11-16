@@ -13,7 +13,7 @@ export async function validateMembershipCart(db,tenant,lines,{customerId=null,of
   return [];
  }
  if(offline||qr)throw fail(409,'Memberships require an online cashier checkout');
- if(held)throw fail(409,'Parked membership sales must be resumed as a new checkout');
+ // Parked sales are permitted only when their customer stays identical at checkout.
  if(promo||loyalty)throw fail(409,'Membership plans cannot be combined with promotion or reward codes');
  if(!uuid.test(customerId||''))throw fail(400,'Select a membership customer before payment');
  const customer=await one(db,'SELECT id FROM service_customers WHERE tenant_id=$1 AND id=$2',[tenant,customerId]);

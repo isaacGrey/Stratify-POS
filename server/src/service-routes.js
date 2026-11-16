@@ -118,7 +118,7 @@ export function registerServiceRoutes(app,{data,permit,audit,ident}) {
   req.role==='cashier'
    ? rows(db,'SELECT id,name,reference FROM service_customers WHERE tenant_id=$1 ORDER BY name,id LIMIT 1000',[req.tenant])
    : rows(db,'SELECT * FROM service_customers WHERE tenant_id=$1 ORDER BY name,id LIMIT 1000',[req.tenant])));
- app.post('/api/shop/service-customers',restricted,data(async(db,req)=>{
+ app.post('/api/shop/service-customers',permit('owner','manager','cashier'),data(async(db,req)=>{
   const {name,email=null,phone=null,reference=null,notes=''}=req.body;
   if(!isText(name,1,160)||!isText(notes,0,1000)||
    (email!==null&&(!isText(email,1,254)||!/^\S+@\S+\.\S+$/.test(email.trim())))||

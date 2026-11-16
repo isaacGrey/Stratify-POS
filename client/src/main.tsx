@@ -1925,12 +1925,15 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
     const { data: tables, load: reloadTables } = useLoad(request, 'tables');
     const { data: settings, load: reloadSettings, err: settingsError } = useLoad(request, 'settings');
     const { data: promotions, load: reloadPromotions, err: promotionError } = useLoad(request, 'promotions');
+    const {data:membershipCustomers,load:reloadMembershipCustomers}=useLoad(request,!offline?'service-customers':null);
     const [branch, setBranch] = useState('');
     const {data:heldOrders,load:reloadHolds} = useLoad(request,!offline && branch ? 'holds?branch_id='+branch : null);
     const [heldOrderId,setHeldOrderId] = useState<string | null>(null);
     const [category, setCategory] = useState('all');
     const [search, setSearch] = useState('');
     const [cart, setCart] = useState([]);
+    const [membershipCustomerId,setMembershipCustomerId]=useState('');
+    const [membershipCustomerName,setMembershipCustomerName]=useState('');
     const [custom, setCustom] = useState(null);
     const [orderType, setOrderType] = useState('takeout');
     const [table, setTable] = useState('');
@@ -1946,8 +1949,9 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
         product_id: line.product.id, variation_id: line.variation?.id,
         addon_ids: line.addonList.map(a => a.id), quantity: line.qty
     }));
-    const promoKey = promo.trim();
-    const rewardKey = offline ? '' : rewardCode.trim();
+    const includesMembership=cart.some(line=>line.product.product_type==='membership');
+    const promoKey = includesMembership?'':promo.trim();
+    const rewardKey = offline || includesMembership ? '' : rewardCode.trim();
     const requiresQuote = !offline && Boolean(promoKey || rewardKey);
     const onlineQuote = useCheckoutQuote(request, requiresQuote && branch && cartPayload.length
         ? JSON.stringify({ branch_id: branch, promo_code: promoKey, loyalty_code: rewardKey, items: cartPayload }) : null, quoteVersion);
@@ -1977,7 +1981,7 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
 
     function updateQuantity(key, delta) {
         setCart(lines => lines.map(line => line.key === key
-            ? { ...line, qty: Math.min(100, line.qty + delta) } : line).filter(line => line.qty > 0));
+            ? { ...line, qty: Math.min(line.product.product_type==='membership'?1:100, line.qty + delta) } : line).filter(line => line.qty > 0));
     }
 
     function add(product, variationId = '', addonIds = []) {
@@ -1987,8 +1991,9 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
         const unit = variationPrice(product, variant) +
             addonList.reduce((sum, addon) => sum + addon.price_cents, 0);
         setCart(lines => lines.some(line => line.key === key)
-            ? lines.map(line => line.key === key ? { ...line, qty: Math.min(100, line.qty + 1) } : line)
+            ? lines.map(line => line.key === key ? { ...line, qty: Math.min(product.product_type==='membership'?1:100, line.qty + 1) } : line)
             : [...lines, { key, product, variation: variant, addonList, qty: 1, unit }]);
+        if(product.product_type==='membership'){setPromo('');setRewardCode('');}
         setCustom(null);
     }
 
@@ -2001,14 +2006,19 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
             unit: variationPrice(product, variation) + availableAddons.reduce((sum, item) => sum + item.price_cents, 0)
         } : { ...line, available };
     });
-    const cartUnavailable = pricedCart.some(line => !line.available);
+    const cartUnavailable = pricedCart.some(line => !line.available ||
+        line.product.product_type==='membership'&&(!line.product.sell_through_pos||!line.product.membership_plan_active));
     const subtotal = pricedCart.reduce((sum, line) => sum + line.qty * line.unit, 0);
+    const hasFood=pricedCart.some(line=>line.product?.product_class==='food_beverage');
+    const effectiveOrderType=hasFood?orderType:'standard';
     const totals = requiresQuote ? onlineQuote?.totals :
         checkoutTotals(subtotal, promoKey, promotions, settings.tax_basis_points, settings.service_basis_points);
     const cash = offline || method === 'cash';
     const change = totals && pesos(tender) - totals.total_cents;
     const searchTerm=search.trim().toLowerCase();
-    const filtered = products.filter(p => p.active && (category === 'all' || p.category_id === category) &&
+    const filtered = products.filter(p => p.active &&
+        (p.product_type!=='membership'||(!offline && p.sell_through_pos && p.membership_plan_active && membershipCustomers)) &&
+        (category === 'all' || p.category_id === category) &&
         (p.name.toLowerCase().includes(searchTerm) ||
             p.sku?.toLowerCase().includes(searchTerm) ||
             p.barcode?.toLowerCase().includes(searchTerm) ||
@@ -2021,8 +2031,9 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
                 throw new Error('Only a new online cart can be parked.');
             }
             await request('holds','POST',{
-                id:crypto.randomUUID(),branch_id:branch,items:cartPayload,order_type:orderType,
-                table_id:orderType==='dine_in' ? table||null : null,
+                id:crypto.randomUUID(),branch_id:branch,items:cartPayload,order_type:effectiveOrderType,
+                table_id:hasFood&&orderType==='dine_in' ? table||null : null,
+                service_customer_id:includesMembership?membershipCustomerId:null,
                 promo_code:promoKey||null,loyalty_code:rewardKey||null
             });
             setCart([]);setPromo('');setRewardCode('');setTable('');
@@ -2052,6 +2063,7 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
             setCart(restored);
             setOrderType(draft.order_type);
             setTable(draft.table_id||'');
+            setMembershipCustomerId(draft.service_customer_id||'');
             setPromo(draft.promo_code||'');
             setRewardCode(draft.loyalty_code||'');
             setHeldOrderId(draft.id);
@@ -2073,11 +2085,16 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
             await act(async () => {
                 if (offline && unconfirmed) throw new Error('Reconnect to finish the previous checkout.');
                 if (!unconfirmed && (!branch || !totals)) throw new Error('Select a branch and confirm the order total.');
+                if (!unconfirmed && includesMembership &&
+                    !(membershipCustomers||[]).some(c=>c.id===membershipCustomerId))
+                  throw new Error('Select or register a customer before selling a membership.');
+                if(offline && includesMembership)throw new Error('Reconnect to sell customer memberships.');
                 const payload = unconfirmed || {
                     client_sale_id: crypto.randomUUID(), branch_id: branch,
                     held_order_id: !offline ? heldOrderId : null,
-                    order_type: orderType,
-                    table_id: orderType === 'dine_in' ? table || null : null,
+                    order_type: effectiveOrderType,
+                    table_id: hasFood && orderType === 'dine_in' ? table || null : null,
+                    service_customer_id: includesMembership?membershipCustomerId:null,
                     payment_method: cash ? 'cash' : method,
                     register_session_id: !offline && cash ? registerId : null,
                     amount_tendered_cents: cash ? pesos(tender) : null,
@@ -2094,6 +2111,7 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
                     reloadTables();
                     setTable('');
                     setCart([]);
+                    setMembershipCustomerId('');
                     setHeldOrderId(null);
                     reloadHolds();
                     setPromo('');
@@ -2185,17 +2203,39 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
             </section>
             <aside className="cart-panel">
                 <div className="cart-head"><h2>Order details <span>({cart.reduce((n, x) => n + x.qty, 0)})</span></h2><ShoppingCart size={21} /></div>
-                <div className="order-types">
+                {hasFood&&<div className="order-types">
                     {[['dine_in', 'Dine in'], ['takeout', 'Takeout'], ['delivery', 'Delivery']].map(([key, label]) =>
                         <button key={key} className={orderType === key ? 'on' : ''} disabled={busy || !!unconfirmed}
                             onClick={() => setOrderType(key)}>{label}</button>)}
-                </div>
-                {orderType === 'dine_in' && <select aria-label="Table" value={table} onChange={e => setTable(e.target.value)}>
+                </div>}
+                {hasFood&&pricedCart.some(line=>line.product?.product_class!=='food_beverage')&&
+                    <p className="membership-pos-hint">Restaurant fulfillment applies to food and beverage items only.</p>}
+                {includesMembership&&<div className="membership-pos-selection">
+                    <strong>Customer membership checkout</strong>
+                    <p>A paid sale automatically creates or renews the selected customer's membership. Membership plans require an online connection.</p>
+                    <Field label="Customer (required)"><select value={membershipCustomerId} disabled={busy||!!unconfirmed}
+                        onChange={e=>setMembershipCustomerId(e.target.value)}>
+                        <option value="">Select registered customer</option>
+                        {(membershipCustomers||[]).map(c=><option key={c.id} value={c.id}>{c.name}{c.reference?' · '+c.reference:''}</option>)}
+                    </select></Field>
+                    <div className="inline-form"><input aria-label="New membership customer name" maxLength={160}
+                        placeholder="New customer name" value={membershipCustomerName}
+                        onChange={e=>setMembershipCustomerName(e.target.value)} disabled={busy||!!unconfirmed}/>
+                        <Button secondary disabled={busy||!!unconfirmed||!membershipCustomerName.trim()} onClick={()=>act(async()=>{
+                            const created=await request('service-customers','POST',
+                                {name:membershipCustomerName.trim(),email:null,phone:null,reference:null,notes:''});
+                            setMembershipCustomerId(created.id);
+                            setMembershipCustomerName('');
+                            reloadMembershipCustomers();
+                        })}>Register customer</Button></div>
+                    <small className="membership-pos-hint">Membership plans are tracked separately from one-time services.</small>
+                </div>}
+                {hasFood && orderType === 'dine_in' && <select aria-label="Table" value={table} onChange={e => setTable(e.target.value)}>
                     <option value="">Select table (optional)</option>
                     {tables?.filter(t => t.branch_id === branch && ['available', 'reserved'].includes(t.status))
                         .map(t => <option key={t.id} value={t.id}>{t.label}{t.status === 'reserved' ? ' · Reserved' : ''}</option>)}
                 </select>}
-                {!offline && tables?.some(t => t.branch_id === branch && t.status === 'occupied') &&
+                {!offline && hasFood && tables?.some(t => t.branch_id === branch && t.status === 'occupied') &&
                     <details><summary>Occupied tables</summary>
                         <div className="inline-form">{tables.filter(t => t.branch_id === branch && t.status === 'occupied').map(t =>
                             <button className="text-link" key={t.id} disabled={busy} onClick={() => act(async () => {
@@ -2213,14 +2253,14 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
                         <div className="qty-control">
                             <button aria-label={'Remove one ' + x.product.name} disabled={busy || !!unconfirmed} onClick={() => updateQuantity(x.key, -1)}><Minus size={16} /></button>
                             <span>{x.qty}</span>
-                            <button aria-label={'Add one ' + x.product.name} disabled={busy || !!unconfirmed || x.qty >= 100} onClick={() => updateQuantity(x.key, 1)}><Plus size={16} /></button>
+                            <button aria-label={'Add one ' + x.product.name} disabled={busy || !!unconfirmed || x.qty >= (x.product.product_type==='membership'?1:100)} onClick={() => updateQuantity(x.key, 1)}><Plus size={16} /></button>
                         </div>
                     </div>) : <Empty text="Your cart is empty." />}
                 </div>
                 <div className="checkout-form">
                     <div className="checkout-row"><span>Subtotal</span><strong>{money(subtotal)}</strong></div>
-                    <Field label="Promo code"><input value={promo} maxLength={100} disabled={busy || !!unconfirmed} onChange={e => setPromo(e.target.value)} /></Field>
-                    {!offline && <Field label="Reward account code"><input value={rewardCode} maxLength={32} disabled={busy || !!unconfirmed}
+                    <Field label="Promo code"><input value={includesMembership?'':promo} maxLength={100} disabled={busy || !!unconfirmed || includesMembership} onChange={e => setPromo(e.target.value)} /></Field>
+                    {!offline && <Field label="Reward account code"><input value={includesMembership?'':rewardCode} maxLength={32} disabled={busy || !!unconfirmed || includesMembership}
                         onChange={e => setRewardCode(e.target.value)} /></Field>}
                     {onlineQuote?.totals?.loyalty_points != null && <p>{onlineQuote.totals.loyalty_points} points available</p>}
                     {(promoKey || rewardKey) && !totals && cart.length > 0 && <p role={offline || onlineQuote?.error ? 'alert' : 'status'}>
@@ -2245,7 +2285,7 @@ function POS({ request, act, busy, offline, scope, cashierId, role }) {
                         }}>Return held order to list</button>}
                     {!offline && !heldOrderId && <Button secondary disabled={busy || !!unconfirmed ||
                         !branch || !cart.length || cartUnavailable} onClick={parkOrder}>Hold / park order</Button>}
-                    <Button onClick={checkout} disabled={busy || (unconfirmed ? offline : !branch || !cart.length || cartUnavailable || !totals || (cash && change < 0) ||
+                    <Button onClick={checkout} disabled={busy || (unconfirmed ? offline : !branch || !cart.length || cartUnavailable || !totals || (includesMembership&&!membershipCustomerId) || (cash && change < 0) ||
                         (!offline && cash && settings.require_cash_register && !registerId))}>
                         {busy ? 'Processing…' : unconfirmed ? 'Retry checkout' : offline ? 'Save cash sale' : 'Complete sale'} <ArrowRight size={18} />
                     </Button>
