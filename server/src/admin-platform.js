@@ -82,12 +82,22 @@ export function platformRouter(wrap) {
         }));
     }
 
+    router.get('/users/business-options',wrap(async(_req,res)=>{
+        res.set('Cache-Control','no-store').json(await rows(pool,
+            'SELECT id,name FROM tenants WHERE archived_at IS NULL ORDER BY name,id LIMIT 1000'));
+    }));
     router.get('/users', wrap(async (req,res) => {
         const { offset,term } = pagination(req.query);
-        res.json(await rows(pool, `SELECT u.id,u.name,u.email,u.active,u.archived_at,u.suspended_at,u.platform_admin,u.created_at,
-            (SELECT count(*)::int FROM memberships m WHERE m.user_id=u.id) AS workspaces
-            FROM users u WHERE strpos(lower(u.name || ' ' || u.email),lower($1))>0 ORDER BY u.created_at DESC,u.id
-            LIMIT 50 OFFSET $2`, [term,offset]));
+        const businessId=req.query.business_id||null;
+        if(businessId&&!uuid.test(businessId))throw fail(400,'Invalid business filter');
+        res.set('Cache-Control','no-store').json(await rows(pool, `SELECT u.id,u.name,u.email,u.active,u.archived_at,u.suspended_at,u.platform_admin,u.created_at,
+            (SELECT count(*)::int FROM memberships m WHERE m.user_id=u.id) AS workspaces,
+            COALESCE((SELECT string_agg(DISTINCT t.name, ', ' ORDER BY t.name) FROM memberships m
+               JOIN tenants t ON t.id=m.tenant_id WHERE m.user_id=u.id),'') AS businesses
+            FROM users u WHERE strpos(lower(u.name || ' ' || u.email),lower($1))>0
+             AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM memberships m
+                 WHERE m.user_id=u.id AND m.tenant_id=$3))
+            ORDER BY u.created_at DESC,u.id LIMIT 50 OFFSET $2`, [term,offset,businessId]));
     }));
     router.post('/users', wrap(async (req,res) => {
         const { name,password } = req.body;
