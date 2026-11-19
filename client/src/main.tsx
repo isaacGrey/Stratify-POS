@@ -6,6 +6,9 @@ import { fetchPaymentMethods, paymentStageLabel, ReceiptSubmission, type Payment
 import { CashRegisterPanel, PurchasingPage, RefundDialog } from './operations';
 import { CustomerOrdersQueue, KitchenDisplay, MenuManagement, RegisterSummary } from './kitchen-menu';
 import { CustomerServices } from './customer-services';
+import { AppointmentPage } from './appointment-page';
+import { OperationalReportPanel } from './operational-report-panel';
+import { PlatformNotifications } from './platform-notifications';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { LayoutDashboard, Coffee, Package, ChartNoAxesCombined, Users, Settings, Store, LogOut, Plus, Search, ShoppingCart, Minus, Trash2, Receipt, ArrowRight, ChevronDown, Menu, X, Bell, Clock, CalendarDays, Tags, CreditCard, ShieldCheck, Sun, Layers, UserRound, ClipboardList, CheckCircle2, Printer, ArrowUpRight, Wallet, AlertTriangle } from 'lucide-react';
@@ -69,6 +72,7 @@ const routes: [
     ['menu','Customer QR Menus',ClipboardList],
     ['products', 'Products & Services', ShoppingBag],
     ['services','Customer Memberships',CalendarDays],
+    ['appointments','Appointments',CalendarDays],
     ['inventory', 'Inventory Management', Boxes],
     ['purchasing', 'Purchasing & Suppliers', ClipboardList],
     ['orders', 'Sales & Transactions', Receipt],
@@ -438,6 +442,7 @@ const visibleRoutes = routes.filter(([id]) => {
     if (id==='kitchen') return allowed('kitchen');
     if (id==='menu') return canManage && allowed('menu');
     if (id==='services') return (canManage||role==='cashier') && allowed('services');
+    if (id==='appointments') return (canManage||role==='cashier') && allowed('appointments');
     if (['branches','promotions','products','inventory','purchasing'].includes(id)) return canManage && allowed(id);
     if (id==='reports') return currentShop?.modules ? allowed(id) : canManage;
     return allowed(id);
@@ -569,7 +574,7 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
                 <p>{['cashier','staff'].includes(role)?'Only your permitted work tools appear here.':'Sales, inventory, staff, and reporting — all in one place.'}</p>
             </div>
             <button className="nav-item" onClick={logout}><LogOut size={18}/>Sign out</button></div></aside>
-        <div className="main"><header className="topbar"><div className="top-left"><button className="icon-btn menu-trigger" onClick={() => setMobile(true)}><Menu /></button><div className="breadcrumb">Workspace <span>/</span> <b>{activePage === 'admin' ? platformNavigation.find(row => row[0]===adminSection)?.[1] : routes.find(x => x[0] === activePage)?.[1]}</b></div></div><div className="top-actions"><span className="today"><CalendarDays size={16}/>{new Date().toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}</span><span className="user-avatar">{me.user.name.slice(0, 1).toUpperCase()}</span><div className="user-info"><strong>{me.user.name}</strong><small>{role || 'Platform Admin'}</small></div></div></header>
+        <div className="main"><header className="topbar"><div className="top-left"><button className="icon-btn menu-trigger" onClick={() => setMobile(true)}><Menu /></button><div className="breadcrumb">Workspace <span>/</span> <b>{activePage === 'admin' ? platformNavigation.find(row => row[0]===adminSection)?.[1] : routes.find(x => x[0] === activePage)?.[1]}</b></div></div><div className="top-actions">{me.superAdmin&&<PlatformNotifications request={request}/>}<span className="today"><CalendarDays size={16}/>{new Date().toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}</span><span className="user-avatar">{me.user.name.slice(0, 1).toUpperCase()}</span><div className="user-info"><strong>{me.user.name}</strong><small>{role || 'Platform Admin'}</small></div></div></header>
             
 <main
     className="content"
@@ -658,6 +663,7 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
 
 {/* SERVICE MEMBERSHIPS — MANUAL ENTITLEMENTS, NOT AUTOMATED BILLING */}
 {activePage === 'services' && currentShop && serverAvailable === true && (canManage||role==='cashier') && <CustomerServices request={request} readOnly={role==='cashier'}/>}
+{activePage === 'appointments' && currentShop && serverAvailable===true && <AppointmentPage request={request} role={role}/>}
 
 {/* INVENTORY MANAGEMENT */}
 {activePage === 'inventory' &&
@@ -713,6 +719,7 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
             act={act}
             role={role}
             setNotice={setNotice}
+            limited={currentShop.branch_ids != null}
         />
 )}
 
@@ -832,7 +839,8 @@ function Auth({ onSuccess, publicReq }) {
         shopName: '',
         email: '',
         password: '',
-        plan: (new URLSearchParams(window.location.search).get('plan') || 'free') as SubscriptionChoice
+        plan: (new URLSearchParams(window.location.search).get('plan') || 'free') as SubscriptionChoice,
+        business_type:'food'
     });
 
     const [plans, setPlans] = useState<PublicPlan[]>([]);
@@ -1398,6 +1406,15 @@ function Auth({ onSuccess, publicReq }) {
                                 </Field>
                             )}
 
+                            {mode === 'register' && (
+                                <Field label="Business type">
+                                  <select value={form.business_type}
+                                   onChange={e=>updateForm('business_type',e.target.value)} required>
+                                   <option value="food">Food-related / restaurant / café</option>
+                                   <option value="non_food">Retail / gym / clinic / other non-food business</option>
+                                  </select>
+                                </Field>
+                            )}
                             {mode === 'register' && (
                                 <Field label="Business name">
                                     <input
@@ -2996,6 +3013,7 @@ function Inventory({ request, act, role, limited }) {
             <Metric label="At or below reorder point" val={stock.filter(row => Number(row.available) <= Number(row.low_stock_at)).length}
                 icon={AlertTriangle} tint="peach" foot="Current location" />
         </div>
+        <OperationalReportPanel kind="inventory" request={request} branchLimited={limited}/>
         {!mode && balance && role === 'owner' && <Panel title="Branch inventory">
             <p className="padded">All locations currently draw from shared stock. Enable branch inventory when you are ready to allocate stock to each location.</p>
             <div className="padded"><Button secondary onClick={() => setEnabling(true)}>Set up branch inventory</Button></div>
@@ -3286,7 +3304,7 @@ const teamRoles = [['manager','Manager'], ['cashier','Cashier'], ['staff','Staff
 const weekDays = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const shiftDuration = seconds => seconds == null ? '—' : (Number(seconds) / 3600).toFixed(2) + ' h';
 
-function Staff({ request, act, role, setNotice, access }) {
+function Staff({ request, act, role, setNotice, access, limited=false }) {
     const manages = access?.staff !== false && (role === 'owner' || role === 'manager');
     const attendanceAllowed = access?.attendance !== false;
     const { data: team, load: loadTeam } = useLoad(request, manages ? 'staff' : null);
@@ -3409,6 +3427,7 @@ function Staff({ request, act, role, setNotice, access }) {
                 </>}
             </div>]
         ]} /></Panel>}
+        {manages && attendanceAllowed && <OperationalReportPanel kind="attendance" request={request} branchLimited={limited}/>}
         {attendanceAllowed && <>
         <Panel title="Attendance summary · last 30 days"><Table items={summary || []} columns={[
             ['name','Employee'], ['shifts','Shifts'], ['late_shifts','Late starts'], ['work_seconds','Completed work time', shiftDuration]
@@ -3850,6 +3869,20 @@ function SettingsPage({ request, act, role, token, tenant, access }) {
         <Heading title="Shop settings & billing" />
         {pageError && <p className="flash error" role="alert">{pageError}</p>}
         <div className="two-col">
+            {settingsAllowed && role==='owner' && form && <Panel title="Business classification">
+               <div className="settings-form">
+                 <Field label="Business type"><select value={form.business_type||'food'}
+                  onChange={e=>setForm({...form,business_type:e.target.value,kitchen_enabled:e.target.value==='food'})}>
+                    <option value="food">Food-related / restaurant</option>
+                    <option value="non_food">Non-food / retail / gym / clinic</option>
+                 </select></Field>
+                 <p className="operational-hint">Non-food businesses cannot access the Kitchen Display. Existing kitchen history is retained.</p>
+                 <Button secondary disabled={saving} onClick={()=>save(async()=>{
+                   await request('business-type','PUT',{business_type:form.business_type});
+                   window.location.reload();
+                 })}>Apply business type</Button>
+               </div>
+             </Panel>}
             {settingsAllowed && <Panel title="Checkout settings">{form ? <div className="settings-form">
                 <Field label="Tax rate (%)"><input type="number" min="0" max="100" step="0.01" value={form.tax_basis_points / 100}
                     onChange={e => setForm({ ...form, tax_basis_points: Math.round(Number(e.target.value) * 100) })} /></Field>
@@ -3857,6 +3890,12 @@ function SettingsPage({ request, act, role, token, tenant, access }) {
                     onChange={e => setForm({ ...form, service_basis_points: Math.round(Number(e.target.value) * 100) })} /></Field>
                 <Field label="Spend per loyalty point (PHP)"><input type="number" min="0.01" step="0.01" value={form.loyalty_cents_per_point / 100}
                     onChange={e => setForm({ ...form, loyalty_cents_per_point: pesos(e.target.value) })} /></Field>
+                {form.business_type==='food'&&<label className="check">
+                  <input type="checkbox" checked={form.kitchen_enabled!==false}
+                    onChange={e=>setForm({...form,kitchen_enabled:e.target.checked})}/>
+                  Enable Kitchen Display</label>}
+                {form.business_type!=='food'&&<p className="operational-hint">
+                  Kitchen Display is automatically disabled for non-food businesses.</p>}
                 <Field label="Receipt footer"><textarea value={form.receipt_footer} onChange={e => setForm({ ...form, receipt_footer: e.target.value })} /></Field>
                 <Button disabled={saving} onClick={() => save(async () => { await request('settings', 'PUT', form); load(); })}>Save settings</Button>
             </div> : <Load />}</Panel>}

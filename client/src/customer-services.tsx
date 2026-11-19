@@ -37,6 +37,7 @@ export function CustomerServices({request,readOnly=false}:{request:Api;readOnly?
  const branches=useLoad(request,'branches');
  const [tab,setTab]=useState('memberships');
  const [lookup,setLookup]=useState('');
+ const [statusFilter,setStatusFilter]=useState('all');
  const [plan,setPlan]=useState<any>(initialPlan());
  const [customer,setCustomer]=useState<any>(initialCustomer());
  const [grant,setGrant]=useState<any>(InitialGrant());
@@ -93,15 +94,39 @@ export function CustomerServices({request,readOnly=false}:{request:Api;readOnly?
  const activePlans=(plans.data||[]).filter((p:any)=>p.active&&p.product_active);
  const availableServices=(products.data||[]).filter((p:any)=>p.product_type==='membership');
  const records=entitlements.data||[];
- const searched=records.filter((e:any)=>{const customer=(customers.data||[]).find((c:any)=>c.id===e.customer_id);
-  return [e.customer_name,e.plan_name,customer?.reference].join(' ').toLowerCase().includes(lookup.trim().toLowerCase());});
+ const searched=records.filter((e:any)=>{
+   const customer=(customers.data||[]).find((c:any)=>c.id===e.customer_id);
+   const match=[e.customer_name,e.plan_name,customer?.reference].join(' ').toLowerCase().includes(lookup.trim().toLowerCase());
+   return match&&(statusFilter==='all'||e.effective_status===statusFilter||
+     (statusFilter==='scheduled'&&e.starts_on&&stamp(e.starts_on)>today()));
+ });
  const status=(item:any)=>item.effective_status==='cancelled'?'Cancelled':item.effective_status==='expired'?'Expired':
   item.starts_on&&stamp(item.starts_on)>today()?'Scheduled':'Active';
+ const summary=[
+  {label:'Active',value:records.filter((e:any)=>e.effective_status==='active'&&stamp(e.starts_on)<=today()).length},
+  {label:'Scheduled',value:records.filter((e:any)=>stamp(e.starts_on)>today()&&e.effective_status!=='cancelled').length},
+  {label:'Expired',value:records.filter((e:any)=>e.effective_status==='expired').length},
+  {label:'Cancelled',value:records.filter((e:any)=>e.effective_status==='cancelled').length}
+ ];
+ const metrics=<div className="membership-overview">
+    {summary.map(x=><div key={x.label} className="membership-overview-card">
+      <span>{x.label}</span><strong>{x.value}</strong>
+    </div>)}
+  </div>;
+ const searchControls=<div className="membership-search">
+  <Field label="Search member, reference or plan"><input value={lookup} maxLength={160}
+    placeholder="Name, membership code or plan" onChange={e=>setLookup(e.target.value)}/></Field>
+  <Field label="Membership status"><select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}>
+    <option value="all">All statuses</option>
+    <option value="active">Active</option><option value="scheduled">Scheduled</option>
+    <option value="expired">Expired</option><option value="cancelled">Cancelled</option>
+  </select></Field>
+ </div>;
  if(readOnly)return <>
-  <Heading title="Customer Memberships" sub="Reception verification · Read-only access. Search a customer to check whether their membership is active, scheduled, expired or cancelled."/>
+  <Heading title="Customer Memberships" sub="Reception lookup · Verify membership status, customer code and expiration before admitting a visitor."/>
+  {metrics}
   <div style={{...surface,marginBottom:14}}>
-   <Field label="Find member by name, reference or plan"><input value={lookup} maxLength={160}
-     placeholder="Search name or member reference" onChange={e=>setLookup(e.target.value)}/></Field>
+   {searchControls}
    <p style={{fontSize:12}}>Verification only. Membership grants, renewals, cancellations and plan settings are restricted to managers and owners.</p>
   </div>
   <Panel title="Membership status">
@@ -123,10 +148,12 @@ export function CustomerServices({request,readOnly=false}:{request:Api;readOnly?
   </div>}
  </>;
  return <>
-  <Heading title="Customer services & memberships" sub="Manage customer memberships, automatically linked POS plans and optional manual grants. Paid POS sales activate or renew entitlements atomically."/>
+  <Heading title="Customer Memberships" eyebrow="MEMBER MANAGEMENT"
+   sub="Manage member profiles, tracked entitlements, POS-linked plans and membership history from one place."/>
+  {metrics}
   {(error||notice)&&<p role={error?'alert':'status'} className={'flash '+(error?'error':'success')}>{error||notice}</p>}
   <div className="chip-row">
-   {([['memberships','Memberships'],['customers','Customers'],['plans','Service plans']] as const).map(([key,label])=>
+   {([['memberships','Member register'],['customers','Customer directory'],['plans','Membership plans']] as const).map(([key,label])=>
     <button key={key} className={'chip '+(tab===key?'chip-on':'')} onClick={()=>setTab(key)}>{label}</button>)}
   </div>
   {tab==='plans'&&<>
@@ -176,10 +203,7 @@ export function CustomerServices({request,readOnly=false}:{request:Api;readOnly?
    </div>}
   </>}
   {tab==='memberships'&&<>
-   <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10,marginBottom:12}}>
-    {['Active','Scheduled','Expired','Cancelled'].map(key=><div style={surface} key={key}><small>{key}</small>
-     <h2>{records.filter((p:any)=>status(p)===key).length}</h2></div>)}
-   </div>
+   {searchControls}
    <Panel title="Issue a membership / service entitlement">
     <p style={{padding:12}}>Manual administrative grant. POS-paid memberships appear in this same register automatically; this form does not charge the customer.</p>
     <div style={{...formStyle,padding:12}}>
@@ -200,7 +224,7 @@ export function CustomerServices({request,readOnly=false}:{request:Api;readOnly?
     </div>
    </Panel>
    <Panel title="Membership register">
-    <Table items={records} columns={[
+    <Table items={searched} columns={[
      ['customer_name','Customer'],['plan_name','Service'],['branch_name','Branch'],
      ['starts_on','Starts',stamp],['expires_on','Expires',stamp],
      ['effective_status','Status',(_:any,p:any)=>status(p)],
