@@ -3897,7 +3897,7 @@ function SettingsPage({ request, act, role, token, tenant, access }) {
                 {form.business_type!=='food'&&<p className="operational-hint">
                   Kitchen Display is automatically disabled for non-food businesses.</p>}
                 <Field label="Receipt footer"><textarea value={form.receipt_footer} onChange={e => setForm({ ...form, receipt_footer: e.target.value })} /></Field>
-                <Button disabled={saving} onClick={() => save(async () => { await request('settings', 'PUT', form); load(); })}>Save settings</Button>
+                <Button disabled={saving} onClick={() => save(async () => { await request('settings', 'PUT', form); load(); if(form.kitchen_enabled!==settings.kitchen_enabled)window.location.reload(); })}>Save settings</Button>
             </div> : <Load />}</Panel>}
             {billingAllowed && <Panel title="Subscription">{subscription ? <div className="subscription-card">
                 <h2>{subscription.title}</h2>

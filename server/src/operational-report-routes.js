@@ -73,7 +73,7 @@ export async function createOperationalExport(data,format){
    const rows=sheet.rows.map(r=>sheet.columns.map(c=>show(r[c.key])));
    doc.fontSize(7).fillColor('#172D33').table({
     maxWidth:doc.page.width-60,
-    columnStyles:sheet.columns.map(c=>c.width===9?'0.65*':'*'),
+    columnStyles:sheet.columns.map(() => '*'),
     defaultStyle:{padding:3,border:[0,0,0.2,0],borderColor:'#CCD8DB'},
     rowStyles:index=>index===0?{backgroundColor:'#EAF1F3'}:{},
     data:[headers,...rows]

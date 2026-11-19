@@ -19,8 +19,8 @@ export function validateAppointment(body,old=null){
  const service_name=body.service_name??old?.service_name;
  const requirements=body.requirements??old?.requirements??'';
  const resource_key=(body.resource_key??old?.resource_key??'default').trim().toLowerCase();
- const starts_at=body.starts_at??old?.starts_at;
- const ends_at=body.ends_at??old?.ends_at;
+ const starts_at=body.starts_at??(old?.starts_at instanceof Date?old.starts_at.toISOString():old?.starts_at);
+ const ends_at=body.ends_at??(old?.ends_at instanceof Date?old.ends_at.toISOString():old?.ends_at);
  const status=body.status??old?.status??'pending';
  const start=Date.parse(starts_at),end=Date.parse(ends_at);
  if(!uuid.test(branch_id||'')||(customer_id&&!uuid.test(customer_id))||

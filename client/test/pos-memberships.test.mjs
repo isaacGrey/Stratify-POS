@@ -36,8 +36,8 @@ test('cashiers have a discoverable read-only membership lookup and no plan contr
  assert(main.includes("(canManage||role==='cashier') && allowed('services')"));
  assert(main.includes("readOnly={role==='cashier'}"));
  assert(services.includes("if(readOnly)return <>"));
- assert(services.includes('Reception verification · Read-only access'));
- assert(services.includes('Find member by name, reference or plan'));
+ assert(services.includes('Reception lookup · Verify membership status'));
+ assert(services.includes('Search member, reference or plan'));
  assert(services.includes('Membership grants, renewals, cancellations and plan settings are restricted'));
  assert(services.includes('sell_through_pos'));
  assert(services.includes('price_cents:priceCents'));
