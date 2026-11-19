@@ -22,13 +22,13 @@ export function platformAudit(db, actor, action, target, details = {}) {
         [actor?.id ?? null, action, target, details]);
 }
 
-export async function provisionBusiness(db, { ownerId, name, plan, status, end = null }) {
+export async function provisionBusiness(db, { ownerId, name, plan, status, end = null, businessType='food' }) {
     const slug = (name.trim().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,35) || 'business')
         + '-' + randomBytes(5).toString('hex');
     const business = await one(db, `
-        INSERT INTO tenants (name,slug,status) VALUES ($1,$2,$3)
-        RETURNING id,name,slug,status,created_at
-    `, [name.trim(), slug, ['trial','active'].includes(status) ? 'active' : 'suspended']);
+        INSERT INTO tenants (name,slug,status,business_type) VALUES ($1,$2,$3,$4)
+        RETURNING id,name,slug,status,business_type,created_at
+    `, [name.trim(), slug, ['trial','active'].includes(status) ? 'active' : 'suspended', businessType]);
     await db.query("SELECT set_config('app.tenant_id',$1,true)", [business.id]);
     await db.query("INSERT INTO memberships (tenant_id,user_id,role) VALUES ($1,$2,'owner')", [business.id, ownerId]);
     const subscription = await one(db, `
@@ -38,7 +38,7 @@ export async function provisionBusiness(db, { ownerId, name, plan, status, end =
             CASE WHEN $3='active' THEN $5::timestamptz END)
         RETURNING tenant_id,plan_id,status,trial_ends_at,current_period_ends_at
     `, [business.id, plan.id, status, plan.trial_days, end]);
-    await db.query('INSERT INTO shop_settings (tenant_id) VALUES ($1)', [business.id]);
+    await db.query('INSERT INTO shop_settings (tenant_id,kitchen_enabled) VALUES ($1,$2)', [business.id,businessType==='food']);
     await db.query("INSERT INTO branches (tenant_id,name) VALUES ($1,'Main Branch')", [business.id]);
     return { business, subscription };
 }

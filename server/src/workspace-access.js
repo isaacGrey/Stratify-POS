@@ -1,8 +1,8 @@
-export const modules = ['overview','pos','products','inventory','purchasing','orders','reports','staff','attendance','branches','promotions','settings','billing','audit','kitchen','menu','services'];
+export const modules = ['overview','pos','products','inventory','purchasing','orders','reports','staff','attendance','branches','promotions','settings','billing','audit','kitchen','menu','services','appointments'];
 const defaultModules = {
     owner: modules,
     manager: modules,
-    cashier: ['pos','orders','attendance','kitchen','services'],
+    cashier: ['pos','orders','attendance','kitchen','services','appointments'],
     staff: ['attendance','kitchen']
 };
 const workspaceWide = ['staff','settings','billing','audit'];
@@ -32,6 +32,10 @@ export function canUseRoute(path, method, access, branchIds) {
         case 'register':
         case 'holds': return allow('pos');
         case 'kitchen': return allow('kitchen');
+        case 'appointments': return allow('appointments');
+        case 'business-type': return allow('settings') && fullWorkspace;
+        case 'inventory-reports': return allow('inventory','reports');
+        case 'attendance-reports': return allow('staff','attendance');
         case 'menu':
             if (key==='policy' || key==='links') return allow('menu');
             if (key==='requests') return allow('pos');

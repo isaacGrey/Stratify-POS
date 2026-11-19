@@ -26,6 +26,9 @@ import { registerHoldRoutes } from './holds-routes.js';
 import { registerCustomerMenuRoutes } from './customer-menu-routes.js';
 import { registerKitchenRoutes, enqueueKitchenTicket } from './kitchen-routes.js';
 import { registerServiceRoutes } from './service-routes.js';
+import { registerAppointmentRoutes } from './appointment-routes.js';
+import { registerOperationalReportRoutes } from './operational-report-routes.js';
+import { registerPlatformNotificationRoutes } from './platform-notification-routes.js';
 import {validateMembershipCart,fulfillMembershipCheckout} from './pos-memberships.js';
 import { loadReport, reportFilters } from './reports.js';
 import { attendanceHistory, attendanceStatus, attendanceSummary, recordAttendance } from './attendance.js';
@@ -164,6 +167,8 @@ const tenant = wrap(async (req, res, next) => {
             t.id,
             t.name,
             t.status,
+            t.business_type,
+            ks.kitchen_enabled,
             m.role,
             s.plan_id,
             s.status AS subscription_status,
@@ -171,6 +176,7 @@ const tenant = wrap(async (req, res, next) => {
             s.current_period_ends_at, m.module_permissions, m.branch_ids, t.module_overrides, p.module_access, wr.permissions AS role_permissions
 
         FROM tenants t
+        JOIN shop_settings ks ON ks.tenant_id=t.id
 
         JOIN memberships m
           ON m.tenant_id = t.id
@@ -223,6 +229,8 @@ const tenant = wrap(async (req, res, next) => {
     req.tenant = tenantId;
     req.role = access.role;
     req.modules = moduleAccess(access);
+    req.businessType=access.business_type;
+    if(access.business_type!=='food'||!access.kitchen_enabled)req.modules.kitchen=false;
     req.branchIds = access.branch_ids ?? null;
 
     next();
@@ -364,7 +372,8 @@ app.post(
             password,
             shopName,
             plan = 'free',
-            skip_trial = false
+            skip_trial = false,
+            business_type = 'food'
         } = req.body;
 
         const userEmail = email(req.body.email);
@@ -382,7 +391,7 @@ app.post(
         );
 
         need(
-            planId(plan) && typeof skip_trial==='boolean',
+            planId(plan) && typeof skip_trial==='boolean' && ['food','non_food'].includes(business_type),
             'Invalid subscription plan'
         );
 
@@ -449,9 +458,12 @@ app.post(
             );
 
             const { business, subscription } = await provisionBusiness(client, {
-                ownerId: user.id, name: shopName, plan: trialPlan || selectedPlan, status: isFreeTrial ? 'trial' : 'expired'
+                ownerId: user.id, name: shopName, plan: trialPlan || selectedPlan, status: isFreeTrial ? 'trial' : 'expired', businessType:business_type
             });
 
+            await platformAudit(client,null,'business.registered',business.id,{
+                business:shopName.trim(),plan:selectedPlan.id,trial:isFreeTrial,business_type
+            });
             await client.query('COMMIT');
 
             // --------------------------------------------------
@@ -995,6 +1007,8 @@ app.get(
                 t.name,
                 t.slug,
                 t.status,
+                t.business_type,
+                ks.kitchen_enabled,
                 m.role,
                 s.plan_id,
                 s.status AS subscription_status,
@@ -1005,6 +1019,7 @@ app.get(
 
             JOIN tenants t
               ON t.id = m.tenant_id
+            JOIN shop_settings ks ON ks.tenant_id=t.id
 
             JOIN subscriptions s
               ON s.tenant_id = t.id
@@ -1038,7 +1053,10 @@ app.get(
         res.json({
             user: req.user,
             shops: shops.map(({ module_permissions, module_overrides, module_access, role_permissions, ...shop }) => ({
-                ...shop, modules: moduleAccess({ ...shop, module_permissions, module_overrides, module_access, role_permissions })
+                ...shop, modules: {
+                  ...moduleAccess({ ...shop, module_permissions, module_overrides, module_access, role_permissions }),
+                  kitchen:shop.business_type==='food'&&shop.kitchen_enabled&&moduleAccess({ ...shop, module_permissions, module_overrides, module_access, role_permissions }).kitchen
+                }
             })),
             superAdmin:
                 Boolean(isPlatformAdmin(req.user))
@@ -1158,6 +1176,8 @@ await client.query(
 app.use('/api/shop', auth, tenant, enforceModule);
 registerCustomerMenuRoutes(app,{wrap,data,permit,need,fail,audit,ident});
 registerServiceRoutes(app,{data,permit,audit,ident});
+registerAppointmentRoutes(app,{data,permit,audit});
+registerOperationalReportRoutes(app,{wrap,permit,scopeOptions});
 
 // OVERVIEW
 
@@ -1226,9 +1246,23 @@ app.get('/api/shop/overview', data(async (d, r) => {
 
 // SETTINGS
 
-app.get('/api/shop/settings', data((d, r) =>
-    one(d, 'SELECT * FROM shop_settings WHERE tenant_id=$1', [r.tenant])
-));
+app.get('/api/shop/settings', data(async(d,r)=>{
+    const settings=await one(d,'SELECT * FROM shop_settings WHERE tenant_id=$1',[r.tenant]);
+    return {...settings,business_type:r.businessType,
+        kitchen_enabled:r.businessType==='food'&&settings.kitchen_enabled};
+}));
+
+// Existing businesses can update their classification without losing historical sales.
+app.put('/api/shop/business-type',permit('owner'),data(async(d,r)=>{
+    const kind=r.body?.business_type;
+    need(['food','non_food'].includes(kind),'Select a valid business type');
+    await d.query('SELECT set_tenant_business_type($1)',[kind]);
+    const business={id:r.tenant,business_type:kind};
+    await d.query(`UPDATE shop_settings SET kitchen_enabled=$2 WHERE tenant_id=$1`,
+      [r.tenant,kind==='food']);
+    await audit(d,r,'business.type_updated',{business_type:kind});
+    return business;
+}));
 
 app.put(
     '/api/shop/settings',
@@ -1238,13 +1272,16 @@ app.put(
             tax_basis_points = 0,
             service_basis_points = 0,
             receipt_footer = 'Thank you!',
-            loyalty_cents_per_point = null
+            loyalty_cents_per_point = null,
+            kitchen_enabled = null
         } = r.body;
 
         need(
             [tax_basis_points, service_basis_points]
                 .every(v => Number.isInteger(v) && v >= 0 && v <= 10000) &&
-            (loyalty_cents_per_point === null || money(loyalty_cents_per_point) && loyalty_cents_per_point > 0),
+            (loyalty_cents_per_point === null || money(loyalty_cents_per_point) && loyalty_cents_per_point > 0) &&
+            (kitchen_enabled===null || typeof kitchen_enabled==='boolean') &&
+            (r.businessType==='food' || kitchen_enabled!==true),
             'Invalid rate'
         );
 
@@ -1253,7 +1290,8 @@ app.put(
             `UPDATE shop_settings
              SET tax_basis_points=$1,
                  service_basis_points=$2,
-                 receipt_footer=$3, loyalty_cents_per_point=COALESCE($5, loyalty_cents_per_point)
+                 receipt_footer=$3, loyalty_cents_per_point=COALESCE($5, loyalty_cents_per_point),
+                 kitchen_enabled=CASE WHEN $6::boolean THEN COALESCE($7::boolean,kitchen_enabled) ELSE false END
              WHERE tenant_id=$4
              RETURNING *`,
             [
@@ -1261,7 +1299,9 @@ app.put(
                 service_basis_points,
                 String(receipt_footer).slice(0, 300),
                 r.tenant,
-                loyalty_cents_per_point
+                loyalty_cents_per_point,
+                r.businessType==='food',
+                kitchen_enabled
             ]
         );
     })
@@ -3166,6 +3206,7 @@ app.post('/api/shop/subscription/request-plan', permit('owner'), data(async (db,
 
 // Only authenticated platform super admins may use these routes.
 app.use('/api/admin', auth, admin);
+registerPlatformNotificationRoutes(app,{wrap,auth,admin});
 app.use('/api/admin', platformRouter(wrap));
 app.use('/api/admin', backupRouter(wrap));
 
