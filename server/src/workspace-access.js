@@ -33,6 +33,7 @@ export function canUseRoute(path, method, access, branchIds) {
         case 'holds': return allow('pos');
         case 'kitchen': return allow('kitchen');
         case 'appointments': return allow('appointments');
+        case 'business-type': return allow('settings') && fullWorkspace;
         case 'inventory-reports': return allow('inventory','reports');
         case 'attendance-reports': return allow('staff','attendance');
         case 'menu':
