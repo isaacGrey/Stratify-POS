@@ -38,6 +38,9 @@ export function validateAppointment(body,old=null){
    throw bad(409,'Appointment status transition is not allowed');
   if(['completed','cancelled'].includes(old.status))
    throw bad(409,'Completed and cancelled appointments cannot be edited');
+  const changingTime=start!==Date.parse(old.starts_at)||end!==Date.parse(old.ends_at);
+  if(changingTime&&['completed','cancelled'].includes(status))
+   throw bad(409,'Reschedule first before completing or cancelling an appointment');
   if(status==='rescheduled'&&old.status!=='rescheduled'&&
     start===Date.parse(old.starts_at)&&end===Date.parse(old.ends_at))
     throw bad(400,'A reschedule must change the appointment time');
