@@ -225,6 +225,7 @@ const tenant = wrap(async (req, res, next) => {
 
     req.tenant = tenantId;
     req.role = access.role;
+    req.businessType=access.business_type;
     req.modules = moduleAccess(access);
     req.modules.kitchen = req.modules.kitchen && access.business_type==='food' && access.kitchen_enabled===true;
     req.branchIds = access.branch_ids ?? null;
@@ -1260,7 +1261,7 @@ app.put(
             'Invalid rate'
         );
 
-        const business=await one(d,'SELECT business_type FROM tenants WHERE id=$1',[r.tenant]);
+        const business={business_type:r.businessType};
         if(kitchen_enabled===true&&business?.business_type!=='food')throw fail(403,'Kitchen is only available for food businesses');
         return one(
             d,
