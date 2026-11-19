@@ -6,7 +6,7 @@ export type OrderType = 'standard' | 'dine_in' | 'takeout' | 'delivery';
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 export interface ShopUser { id: string; name: string; email: string; }
-export interface Workspace { id: string; name: string; role: UserRole; modules?: Record<string, boolean>; branch_ids?: string[] | null; }
+export interface Workspace { id: string; name: string; role: UserRole; business_type?: 'food' | 'non_food'; modules?: Record<string, boolean>; branch_ids?: string[] | null; }
 export interface AuthPayload { email?: string; password?: string; name?: string; shopName?: string; plan?: PlanId | string; token?: string | null; [key: string]: unknown; }
 export interface ApiRequest { (path: string, method?: HttpMethod | string, body?: unknown, admin?: boolean, signal?: AbortSignal): Promise<any>; }
 export interface Category { id: string; name: string; }
