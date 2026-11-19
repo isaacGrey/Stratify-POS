@@ -26,6 +26,8 @@ import { registerHoldRoutes } from './holds-routes.js';
 import { registerCustomerMenuRoutes } from './customer-menu-routes.js';
 import { registerKitchenRoutes, enqueueKitchenTicket } from './kitchen-routes.js';
 import { registerServiceRoutes } from './service-routes.js';
+import {registerAppointmentRoutes} from './appointment-routes.js';
+import {registerOperationsReports} from './operations-reports.js';
 import {validateMembershipCart,fulfillMembershipCheckout} from './pos-memberships.js';
 import { loadReport, reportFilters } from './reports.js';
 import { attendanceHistory, attendanceStatus, attendanceSummary, recordAttendance } from './attendance.js';
@@ -168,7 +170,7 @@ const tenant = wrap(async (req, res, next) => {
             s.plan_id,
             s.status AS subscription_status,
             s.trial_ends_at,
-            s.current_period_ends_at, m.module_permissions, m.branch_ids, t.module_overrides, p.module_access, wr.permissions AS role_permissions
+            s.current_period_ends_at, m.module_permissions, m.branch_ids, t.business_type,ks.kitchen_enabled, t.module_overrides, p.module_access, wr.permissions AS role_permissions
 
         FROM tenants t
 
@@ -179,6 +181,7 @@ const tenant = wrap(async (req, res, next) => {
           ON s.tenant_id = t.id
         JOIN plans p ON p.id=s.plan_id
         LEFT JOIN workspace_role_permissions wr ON wr.tenant_id=t.id AND wr.role=m.role
+        LEFT JOIN shop_settings ks ON ks.tenant_id=t.id
 
         WHERE t.id = $1
           AND m.user_id = $2
@@ -222,7 +225,9 @@ const tenant = wrap(async (req, res, next) => {
 
     req.tenant = tenantId;
     req.role = access.role;
+    req.businessType=access.business_type;
     req.modules = moduleAccess(access);
+    req.modules.kitchen = req.modules.kitchen && access.business_type==='food' && access.kitchen_enabled===true;
     req.branchIds = access.branch_ids ?? null;
 
     next();
@@ -364,6 +369,7 @@ app.post(
             password,
             shopName,
             plan = 'free',
+            business_type = 'food',
             skip_trial = false
         } = req.body;
 
@@ -382,7 +388,7 @@ app.post(
         );
 
         need(
-            planId(plan) && typeof skip_trial==='boolean',
+            planId(plan) && typeof skip_trial==='boolean' && ['food','non_food'].includes(business_type),
             'Invalid subscription plan'
         );
 
@@ -449,7 +455,7 @@ app.post(
             );
 
             const { business, subscription } = await provisionBusiness(client, {
-                ownerId: user.id, name: shopName, plan: trialPlan || selectedPlan, status: isFreeTrial ? 'trial' : 'expired'
+                ownerId: user.id, name: shopName, plan: trialPlan || selectedPlan, status: isFreeTrial ? 'trial' : 'expired', businessType:business_type
             });
 
             await client.query('COMMIT');
@@ -999,7 +1005,7 @@ app.get(
                 s.plan_id,
                 s.status AS subscription_status,
                 s.trial_ends_at,
-                s.current_period_ends_at,m.branch_ids,m.module_permissions,t.module_overrides,p.module_access,wr.permissions AS role_permissions
+                s.current_period_ends_at,m.branch_ids,m.module_permissions,t.business_type,ks.kitchen_enabled,t.module_overrides,p.module_access,wr.permissions AS role_permissions
 
             FROM memberships m
 
@@ -1009,6 +1015,7 @@ app.get(
             JOIN subscriptions s
               ON s.tenant_id = t.id
             JOIN plans p ON p.id=s.plan_id
+            LEFT JOIN shop_settings ks ON ks.tenant_id=t.id
             LEFT JOIN workspace_role_permissions wr ON wr.tenant_id=t.id AND wr.role=m.role
 
             WHERE m.user_id = $1
@@ -1038,7 +1045,9 @@ app.get(
         res.json({
             user: req.user,
             shops: shops.map(({ module_permissions, module_overrides, module_access, role_permissions, ...shop }) => ({
-                ...shop, modules: moduleAccess({ ...shop, module_permissions, module_overrides, module_access, role_permissions })
+                ...shop, modules: { ...moduleAccess({ ...shop, module_permissions, module_overrides, module_access, role_permissions }),
+                  kitchen: shop.business_type==='food' && shop.kitchen_enabled===true &&
+                    moduleAccess({ ...shop,module_permissions,module_overrides,module_access,role_permissions }).kitchen }
             })),
             superAdmin:
                 Boolean(isPlatformAdmin(req.user))
@@ -1158,6 +1167,8 @@ await client.query(
 app.use('/api/shop', auth, tenant, enforceModule);
 registerCustomerMenuRoutes(app,{wrap,data,permit,need,fail,audit,ident});
 registerServiceRoutes(app,{data,permit,audit,ident});
+registerAppointmentRoutes(app,{data,permit,audit,fail});
+registerOperationsReports(app,{wrap,permit});
 
 // OVERVIEW
 
@@ -1238,22 +1249,27 @@ app.put(
             tax_basis_points = 0,
             service_basis_points = 0,
             receipt_footer = 'Thank you!',
-            loyalty_cents_per_point = null
+            loyalty_cents_per_point = null,
+            kitchen_enabled = null
         } = r.body;
 
         need(
             [tax_basis_points, service_basis_points]
                 .every(v => Number.isInteger(v) && v >= 0 && v <= 10000) &&
-            (loyalty_cents_per_point === null || money(loyalty_cents_per_point) && loyalty_cents_per_point > 0),
+            (loyalty_cents_per_point === null || money(loyalty_cents_per_point) && loyalty_cents_per_point > 0) &&
+            (kitchen_enabled===null || typeof kitchen_enabled==='boolean'),
             'Invalid rate'
         );
 
+        const business={business_type:r.businessType};
+        if(kitchen_enabled===true&&business?.business_type!=='food')throw fail(403,'Kitchen is only available for food businesses');
         return one(
             d,
             `UPDATE shop_settings
              SET tax_basis_points=$1,
                  service_basis_points=$2,
-                 receipt_footer=$3, loyalty_cents_per_point=COALESCE($5, loyalty_cents_per_point)
+                 receipt_footer=$3, loyalty_cents_per_point=COALESCE($5, loyalty_cents_per_point),
+                 kitchen_enabled=CASE WHEN $6::boolean IS NULL THEN kitchen_enabled ELSE $6 END
              WHERE tenant_id=$4
              RETURNING *`,
             [
@@ -1261,7 +1277,8 @@ app.put(
                 service_basis_points,
                 String(receipt_footer).slice(0, 300),
                 r.tenant,
-                loyalty_cents_per_point
+                loyalty_cents_per_point,
+                business?.business_type==='food'?kitchen_enabled:false
             ]
         );
     })

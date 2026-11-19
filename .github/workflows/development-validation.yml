@@ -49,7 +49,7 @@ jobs:
       - name: Apply migrations on isolated PostgreSQL 18
         run: npm run migrate
       - name: Run integration tests
-        run: node --test test/checkout.integration.test.js test/development.integration.test.js test/qr-kitchen.integration.test.js test/customer-services.integration.test.js test/pos-memberships.integration.test.js test/pos-memberships.unit.test.js
+        run: node --test test/checkout.integration.test.js test/development.integration.test.js test/qr-kitchen.integration.test.js test/customer-services.integration.test.js test/pos-memberships.integration.test.js test/pos-memberships.unit.test.js test/operations-expansion.unit.test.js test/operations-expansion.integration.test.js
 
       - name: Repeat targeted membership, refund and cashier regression tests
         run: node --test test/pos-memberships.integration.test.js test/pos-memberships.unit.test.js

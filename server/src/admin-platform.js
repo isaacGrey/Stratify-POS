@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import { one, pool, rows } from './db.js';
 import { fail, inTransaction, planId, platformAudit, platformPlans, provisionBusiness } from './platform.js';
 import { modules, validPermissions } from './workspace-access.js';
+import {registerPlatformNotifications} from './platform-notifications.js';
 
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const emailPattern = /^\S+@\S+\.\S+$/;
@@ -32,6 +33,7 @@ function fields(body, id, creating) {
 
 export function platformRouter(wrap) {
     const router = Router();
+    registerPlatformNotifications(router,wrap);
 
     router.get('/plans', wrap(async (_req,res) => res.json(await platformPlans(pool))));
     router.post('/plans', wrap(async (req,res) => {
@@ -84,10 +86,17 @@ export function platformRouter(wrap) {
 
     router.get('/users', wrap(async (req,res) => {
         const { offset,term } = pagination(req.query);
+        const business=typeof req.query.business==='string'?req.query.business.trim().slice(0,120):'';
         res.json(await rows(pool, `SELECT u.id,u.name,u.email,u.active,u.archived_at,u.suspended_at,u.platform_admin,u.created_at,
-            (SELECT count(*)::int FROM memberships m WHERE m.user_id=u.id) AS workspaces
-            FROM users u WHERE strpos(lower(u.name || ' ' || u.email),lower($1))>0 ORDER BY u.created_at DESC,u.id
-            LIMIT 50 OFFSET $2`, [term,offset]));
+            (SELECT count(*)::int FROM memberships m WHERE m.user_id=u.id) AS workspaces,
+            (SELECT string_agg(DISTINCT t.name,', ' ORDER BY t.name) FROM memberships m
+              JOIN tenants t ON t.id=m.tenant_id WHERE m.user_id=u.id) AS business_names
+            FROM users u
+            WHERE strpos(lower(u.name || ' ' || u.email),lower($1))>0
+              AND ($3::text='' OR EXISTS (SELECT 1 FROM memberships m
+               JOIN tenants t ON t.id=m.tenant_id WHERE m.user_id=u.id
+                AND t.name ILIKE '%'||$3||'%'))
+            ORDER BY u.created_at DESC,u.id LIMIT 50 OFFSET $2`, [term,offset,business]));
     }));
     router.post('/users', wrap(async (req,res) => {
         const { name,password } = req.body;
