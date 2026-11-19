@@ -7,6 +7,9 @@ export async function enqueueKitchenTicket(db, tenant, order) {
       WHERE i.tenant_id=$1 AND i.order_id=$2
         AND COALESCE(i.product_class,p.product_class)='food_beverage' LIMIT 1`,[tenant,order.id]);
     if(!food)return;
+    const policy=await one(db,`SELECT t.business_type,ks.kitchen_enabled FROM tenants t
+      JOIN shop_settings ks ON ks.tenant_id=t.id WHERE t.id=$1`,[tenant]);
+    if(!policy||policy.business_type!=='food'||!policy.kitchen_enabled)return;
     await db.query(
         "INSERT INTO kitchen_tickets(tenant_id,branch_id,order_id) VALUES($1,$2,$3) " +
         "ON CONFLICT (tenant_id,order_id) DO NOTHING",

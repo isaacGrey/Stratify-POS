@@ -6,6 +6,9 @@ import { fetchPaymentMethods, paymentStageLabel, ReceiptSubmission, type Payment
 import { CashRegisterPanel, PurchasingPage, RefundDialog } from './operations';
 import { CustomerOrdersQueue, KitchenDisplay, MenuManagement, RegisterSummary } from './kitchen-menu';
 import { CustomerServices } from './customer-services';
+import { AppointmentsPage } from './appointments';
+import {PlatformNotifications} from './platform-notifications';
+import {downloadOperationsReport} from './operations-export';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { LayoutDashboard, Coffee, Package, ChartNoAxesCombined, Users, Settings, Store, LogOut, Plus, Search, ShoppingCart, Minus, Trash2, Receipt, ArrowRight, ChevronDown, Menu, X, Bell, Clock, CalendarDays, Tags, CreditCard, ShieldCheck, Sun, Layers, UserRound, ClipboardList, CheckCircle2, Printer, ArrowUpRight, Wallet, AlertTriangle } from 'lucide-react';
@@ -69,6 +72,7 @@ const routes: [
     ['menu','Customer QR Menus',ClipboardList],
     ['products', 'Products & Services', ShoppingBag],
     ['services','Customer Memberships',CalendarDays],
+    ['appointments','Appointment Scheduling',CalendarDays],
     ['inventory', 'Inventory Management', Boxes],
     ['purchasing', 'Purchasing & Suppliers', ClipboardList],
     ['orders', 'Sales & Transactions', Receipt],
@@ -438,6 +442,7 @@ const visibleRoutes = routes.filter(([id]) => {
     if (id==='kitchen') return allowed('kitchen');
     if (id==='menu') return canManage && allowed('menu');
     if (id==='services') return (canManage||role==='cashier') && allowed('services');
+    if (id==='appointments') return (canManage||role==='cashier') && allowed('appointments');
     if (['branches','promotions','products','inventory','purchasing'].includes(id)) return canManage && allowed(id);
     if (id==='reports') return currentShop?.modules ? allowed(id) : canManage;
     return allowed(id);
@@ -569,7 +574,7 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
                 <p>{['cashier','staff'].includes(role)?'Only your permitted work tools appear here.':'Sales, inventory, staff, and reporting — all in one place.'}</p>
             </div>
             <button className="nav-item" onClick={logout}><LogOut size={18}/>Sign out</button></div></aside>
-        <div className="main"><header className="topbar"><div className="top-left"><button className="icon-btn menu-trigger" onClick={() => setMobile(true)}><Menu /></button><div className="breadcrumb">Workspace <span>/</span> <b>{activePage === 'admin' ? platformNavigation.find(row => row[0]===adminSection)?.[1] : routes.find(x => x[0] === activePage)?.[1]}</b></div></div><div className="top-actions"><span className="today"><CalendarDays size={16}/>{new Date().toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}</span><span className="user-avatar">{me.user.name.slice(0, 1).toUpperCase()}</span><div className="user-info"><strong>{me.user.name}</strong><small>{role || 'Platform Admin'}</small></div></div></header>
+        <div className="main"><header className="topbar"><div className="top-left"><button className="icon-btn menu-trigger" onClick={() => setMobile(true)}><Menu /></button><div className="breadcrumb">Workspace <span>/</span> <b>{activePage === 'admin' ? platformNavigation.find(row => row[0]===adminSection)?.[1] : routes.find(x => x[0] === activePage)?.[1]}</b></div></div><div className="top-actions"><span className="today"><CalendarDays size={16}/>{new Date().toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}</span>{me.superAdmin && <PlatformNotifications request={request}/>}<span className="user-avatar">{me.user.name.slice(0, 1).toUpperCase()}</span><div className="user-info"><strong>{me.user.name}</strong><small>{role || 'Platform Admin'}</small></div></div></header>
             
 <main
     className="content"
@@ -658,6 +663,9 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
 
 {/* SERVICE MEMBERSHIPS — MANUAL ENTITLEMENTS, NOT AUTOMATED BILLING */}
 {activePage === 'services' && currentShop && serverAvailable === true && (canManage||role==='cashier') && <CustomerServices request={request} readOnly={role==='cashier'}/>}
+
+{/* APPOINTMENTS — reception, managers and owners */}
+{activePage==='appointments' && currentShop && serverAvailable===true && <AppointmentsPage request={request}/>}
 
 {/* INVENTORY MANAGEMENT */}
 {activePage === 'inventory' &&
@@ -832,6 +840,7 @@ function Auth({ onSuccess, publicReq }) {
         shopName: '',
         email: '',
         password: '',
+        business_type: 'food',
         plan: (new URLSearchParams(window.location.search).get('plan') || 'free') as SubscriptionChoice
     });
 
@@ -1413,6 +1422,14 @@ function Auth({ onSuccess, publicReq }) {
                                     />
                                 </Field>
                             )}
+
+                            {mode==='register'&&<Field label="Business type">
+                                <select required value={form.business_type} onChange={e=>updateForm('business_type',e.target.value)}>
+                                    <option value="food">Restaurant / food and beverage</option>
+                                    <option value="non_food">Other business (retail, gym, clinic, services)</option>
+                                </select>
+                                <small>Kitchen Display is available only for food-related businesses.</small>
+                            </Field>}
 
                             {[
                                 'register',
@@ -2959,6 +2976,8 @@ function Inventory({ request, act, role, limited }) {
     const [movement, setMovement] = useState(null);
     const [enabling, setEnabling] = useState(false);
     const [saving, setSaving] = useState(false);
+    const [exportingStock,setExportingStock]=useState('');
+    const [stockExportError,setStockExportError]=useState('');
     const mode = balance?.branch_stock_enabled;
     const poolLabel = mode ? 'Unallocated stock' : 'Shared stock';
     const stock = balance?.items || [];
@@ -2990,7 +3009,17 @@ function Inventory({ request, act, role, limited }) {
     }
 
     return <>
-        <Heading title="Inventory management" action={!limited && <Button onClick={() => openItem()}><Plus size={17} /> Add stock item</Button>} />
+        <Heading title="Inventory management" action={<div className="inline-form">
+            {!limited&&<Button onClick={()=>openItem()}><Plus size={17}/> Add stock item</Button>}
+            {['xlsx','pdf'].map(format=><Button key={format} secondary disabled={!!exportingStock}
+             onClick={async()=>{setExportingStock(format);setStockExportError('');
+              try{const params=new URLSearchParams();if(location)params.set('branch_id',location);
+               await downloadOperationsReport(request,'inventory/export.'+format+'?'+params,
+                'stratify-inventory-'+new Date().toISOString().slice(0,10)+'.'+format);}
+              catch(err){setStockExportError(err instanceof Error?err.message:'Export failed');}
+              finally{setExportingStock('');}}}>{exportingStock===format?'Preparing…':format==='xlsx'?'Export Excel':'Export PDF'}</Button>)}
+        </div>} />
+        {stockExportError&&<p className="flash error" role="alert">{stockExportError}</p>}
         <div className="metrics">
             <Metric label="Stock items tracked" val={stock.length} icon={Package} tint="sage" foot={location ? branches?.find(b => b.id === location)?.name : poolLabel} />
             <Metric label="At or below reorder point" val={stock.filter(row => Number(row.available) <= Number(row.low_stock_at)).length}
@@ -3303,6 +3332,10 @@ function Staff({ request, act, role, setNotice, access }) {
     const [roleForm,setRoleForm] = useState(null);
     const { data: roleDefaults, load: reloadRoleDefaults } = useLoad(request, role==='owner' && manages ? 'staff/role-permissions' : null);
     const [saving, setSaving] = useState(false);
+    const [attExporting,setAttExporting]=useState('');
+    const [attExportError,setAttExportError]=useState('');
+    const [attStart,setAttStart]=useState(new Date(Date.now()-29*86400000).toISOString().slice(0,10));
+    const [attEnd,setAttEnd]=useState(new Date().toISOString().slice(0,10));
     const shift = status?.shift;
     const branches = branchList || [];
 
@@ -3410,6 +3443,22 @@ function Staff({ request, act, role, setNotice, access }) {
             </div>]
         ]} /></Panel>}
         {attendanceAllowed && <>
+        {manages&&<Panel title="Attendance reports · payroll timecards">
+         <div className="form-grid padded">
+          <Field label="From"><input type="date" value={attStart} onChange={e=>setAttStart(e.target.value)}/></Field>
+          <Field label="Through"><input type="date" min={attStart} value={attEnd} onChange={e=>setAttEnd(e.target.value)}/></Field>
+         </div>
+         <div className="inline-form padded">{['xlsx','pdf'].map(format=><Button secondary key={format}
+          disabled={!!attExporting||!attStart||!attEnd||attStart>attEnd}
+          onClick={async()=>{setAttExporting(format);setAttExportError('');
+           try{const params=new URLSearchParams({from:attStart,to:attEnd});
+            await downloadOperationsReport(request,'attendance/export.'+format+'?'+params,
+              'stratify-timecards-'+attStart+'-'+attEnd+'.'+format);}
+           catch(e){setAttExportError(e instanceof Error?e.message:'Export failed');}
+           finally{setAttExporting('');}}}>{attExporting===format?'Preparing…':format==='xlsx'?'Export Excel':'Export PDF'}</Button>)}</div>
+         {attExportError&&<p className="flash error padded">{attExportError}</p>}
+         <p className="padded">Scheduled absences, clock-in/out, breaks and worked hours are included for payroll review. Verify corrections and pay rules before computing salaries.</p>
+        </Panel>}
         <Panel title="Attendance summary · last 30 days"><Table items={summary || []} columns={[
             ['name','Employee'], ['shifts','Shifts'], ['late_shifts','Late starts'], ['work_seconds','Completed work time', shiftDuration]
         ]} /></Panel>
@@ -3858,6 +3907,12 @@ function SettingsPage({ request, act, role, token, tenant, access }) {
                 <Field label="Spend per loyalty point (PHP)"><input type="number" min="0.01" step="0.01" value={form.loyalty_cents_per_point / 100}
                     onChange={e => setForm({ ...form, loyalty_cents_per_point: pesos(e.target.value) })} /></Field>
                 <Field label="Receipt footer"><textarea value={form.receipt_footer} onChange={e => setForm({ ...form, receipt_footer: e.target.value })} /></Field>
+                {<Field label="Kitchen Display availability"><select value={form.kitchen_enabled?'enabled':'disabled'}
+                    onChange={e=>setForm({...form,kitchen_enabled:e.target.value==='enabled'})}
+                    disabled={!form.kitchen_enabled && access?.kitchen===false}>
+                    {access?.kitchen!==false&&<option value="enabled">Enabled</option>}
+                    <option value="disabled">Disabled</option>
+                </select><small>Non-food businesses cannot enable the kitchen module.</small></Field>}
                 <Button disabled={saving} onClick={() => save(async () => { await request('settings', 'PUT', form); load(); })}>Save settings</Button>
             </div> : <Load />}</Panel>}
             {billingAllowed && <Panel title="Subscription">{subscription ? <div className="subscription-card">

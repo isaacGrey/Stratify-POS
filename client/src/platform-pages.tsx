@@ -4,7 +4,7 @@ import { Button, Field, Load, Modal, Panel, Table, fmt, money, pesos, useLoad } 
 
 export const moduleLabels = {
     overview: 'Dashboard', pos: 'Point of sale', services: 'Customer memberships', kitchen: 'Kitchen display', menu: 'Customer QR menus', products: 'Products', inventory: 'Inventory', purchasing: 'Purchasing and suppliers',
-    orders: 'Transactions', reports: 'Reports', staff: 'Team management', attendance: 'Attendance',
+    orders: 'Transactions', reports: 'Reports', staff: 'Team management', attendance: 'Attendance', appointments:'Appointments',
     branches: 'Branches and tables', promotions: 'Promotions', settings: 'Shop settings', billing: 'Billing', audit: 'Activity'
 };
 
@@ -45,10 +45,10 @@ const localDateTime = value => {
     return new Date(time.getTime() - time.getTimezoneOffset() * 60_000).toISOString().slice(0,16);
 };
 
-function usePage(adminReq, resource) {
+function usePage(adminReq, resource, filters='') {
     const [page, setPage] = useState(0);
     const [search, setSearch] = useState('');
-    const state = useLoad(adminReq, resource + '?offset=' + page * 50 + '&q=' + encodeURIComponent(search));
+    const state = useLoad(adminReq, resource + '?offset=' + page * 50 + '&q=' + encodeURIComponent(search) + (filters?'&'+filters:''));
     return { ...state, page, setPage, search, setSearch: value => { setSearch(value); setPage(0); } };
 }
 
@@ -61,7 +61,8 @@ function Pagination({ page, setPage, more }) {
 }
 
 function UsersPage({ adminReq, request }) {
-    const page = usePage(adminReq,'users');
+    const [business,setBusiness]=useState('');
+    const page = usePage(adminReq,'users','business='+encodeURIComponent(business));
     const [form,setForm] = useState(null);
     const action = useSave(request);
     const change = (key,value) => setForm({ ...form,[key]:value });
@@ -69,10 +70,14 @@ function UsersPage({ adminReq, request }) {
     return <Panel title="Platform users" right={<Button onClick={() => {
         action.clear(); setForm({ name:'', email:'', password:'', state:'' });
     }}>Create user</Button>}>
-        <div className="padded"><input aria-label="Search users" placeholder="Search name or email" value={page.search} onChange={e => page.setSearch(e.target.value)} /></div>
+        <div className="padded inline-form">
+          <input aria-label="Search users" placeholder="Search name or email" value={page.search} onChange={e => page.setSearch(e.target.value)} />
+          <input aria-label="Filter users by business" placeholder="Filter by business name" value={business}
+            maxLength={120} onChange={e=>{setBusiness(e.target.value);page.setPage(0);}}/>
+        </div>
         {errorText(page.err)}
         {page.data ? <Table items={page.data} columns={[
-            ['name','Name'], ['email','Email'], ['active','State',(_,row) => userState(row)], ['workspaces','Workspaces'],
+            ['name','Name'], ['email','Email'], ['business_names','Businesses'], ['active','State',(_,row) => userState(row)], ['workspaces','Workspaces'],
             ['id','Action',(_,row) => row.platform_admin ? 'Super Admin' : <button className="text-link" onClick={() => {
                 action.clear(); setForm({ ...row,state:'' });
             }}>Manage</button>]
