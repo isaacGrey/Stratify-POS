@@ -5184,3 +5184,33 @@ td strong,.metric>strong,.product-name,.cart-head h2,.total-row strong {color:va
 .membership-pos-selection select{width:100%;min-height:40px}
 .membership-pos-selection label{font-size:12px}
 .membership-pos-hint{font-size:11px;color:#58736d}
+
+/* Compact, accessible appointment scheduling and membership summary */
+.appointment-calendar{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px;align-items:start}
+.appointment-day{display:flex;flex-direction:column;gap:8px;padding:12px}
+.appointment-entry{border:1px solid var(--border,#e1e6e4);background:#fff;border-radius:9px;
+ padding:11px 12px;text-align:left;display:flex;gap:4px;flex-direction:column;color:inherit;cursor:pointer}
+.appointment-entry:hover,.appointment-entry:focus-visible{border-color:#1f6e64;outline-offset:2px}
+.appointment-entry strong{font-size:12px}.appointment-entry span{font-size:13px}.appointment-entry small{color:#71817c}
+.platform-notifications{position:relative;flex-shrink:0}
+.platform-bell{position:relative}
+.platform-unread{position:absolute;right:-5px;top:-6px;background:#b53634;color:white;border-radius:999px;
+ font-size:10px;min-width:17px;height:17px;display:grid;place-items:center;padding:0 3px}
+.platform-notification-panel{position:absolute;right:0;top:calc(100% + 12px);z-index:110;max-height:min(65vh,520px);
+ width:min(90vw,380px);overflow:hidden;border:1px solid #d9e5e1;box-shadow:0 16px 38px #12332924;
+ background:white;border-radius:12px;display:flex;flex-direction:column}
+.platform-notice-head{display:flex;justify-content:space-between;align-items:center;padding:13px;border-bottom:1px solid #e4e8e7}
+.platform-notice-list{overflow-y:auto;overscroll-behavior:contain}
+.platform-notice{padding:11px 13px;display:flex;justify-content:space-between;gap:9px;border-bottom:1px solid #ecf0ee}
+.platform-notice.unread{background:#f1faf6}.platform-notice>div{display:flex;gap:3px;flex-direction:column}
+.platform-notice small{font-size:11px;color:#587168}.platform-notice-foot{padding:10px;font-size:11px;color:#647e76}
+.membership-overview{display:grid;grid-template-columns:minmax(220px,1.5fr) repeat(3,minmax(115px,1fr));gap:10px;margin-bottom:14px}
+.membership-hero,.membership-metric{border:1px solid #dbe8e3;border-radius:12px;padding:15px;background:#fff}
+.membership-hero{background:#eaf4f1}.membership-hero strong{font-size:16px}.membership-hero p{font-size:12px;margin-top:6px;color:#54726a}
+.membership-metric{display:flex;flex-direction:column;justify-content:space-between;gap:8px}
+.membership-metric small{font-size:11px;color:#587168}.membership-metric strong{font-size:24px}
+.membership-filters{display:flex;flex-wrap:wrap;gap:9px;padding:12px}
+.membership-filters input{flex:2;min-width:170px}.membership-filters select{min-width:120px;flex:1}
+@media(max-width:800px){.membership-overview{grid-template-columns:repeat(3,minmax(0,1fr))}.membership-hero{grid-column:1/-1}}
+@media(max-width:500px){.membership-overview{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .platform-notification-panel{right:-95px}.membership-filters>*{width:100%}}

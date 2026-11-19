@@ -37,6 +37,8 @@ export function CustomerServices({request,readOnly=false}:{request:Api;readOnly?
  const branches=useLoad(request,'branches');
  const [tab,setTab]=useState('memberships');
  const [lookup,setLookup]=useState('');
+ const [memberStatus,setMemberStatus]=useState('all');
+ const [memberPlan,setMemberPlan]=useState('all');
  const [plan,setPlan]=useState<any>(initialPlan());
  const [customer,setCustomer]=useState<any>(initialCustomer());
  const [grant,setGrant]=useState<any>(InitialGrant());
@@ -97,6 +99,8 @@ export function CustomerServices({request,readOnly=false}:{request:Api;readOnly?
   return [e.customer_name,e.plan_name,customer?.reference].join(' ').toLowerCase().includes(lookup.trim().toLowerCase());});
  const status=(item:any)=>item.effective_status==='cancelled'?'Cancelled':item.effective_status==='expired'?'Expired':
   item.starts_on&&stamp(item.starts_on)>today()?'Scheduled':'Active';
+ const filteredRecords=searched.filter((e:any)=>(memberStatus==='all'||status(e).toLowerCase()===memberStatus)&&
+  (memberPlan==='all'||e.plan_id===memberPlan));
  if(readOnly)return <>
   <Heading title="Customer Memberships" sub="Reception verification · Read-only access. Search a customer to check whether their membership is active, scheduled, expired or cancelled."/>
   <div style={{...surface,marginBottom:14}}>
@@ -105,7 +109,7 @@ export function CustomerServices({request,readOnly=false}:{request:Api;readOnly?
    <p style={{fontSize:12}}>Verification only. Membership grants, renewals, cancellations and plan settings are restricted to managers and owners.</p>
   </div>
   <Panel title="Membership status">
-    <Table items={searched} columns={[
+    <Table items={filteredRecords} columns={[
       ['customer_name','Customer',(_:any,e:any)=>{const customer=(customers.data||[]).find((c:any)=>c.id===e.customer_id);
        return <span><strong>{e.customer_name}</strong>{customer?.reference&&<small style={{display:'block'}}>{customer.reference}</small>}</span>;}],
       ['plan_name','Plan'],['branch_name','Branch'],['starts_on','Starts',stamp],
@@ -123,7 +127,17 @@ export function CustomerServices({request,readOnly=false}:{request:Api;readOnly?
   </div>}
  </>;
  return <>
-  <Heading title="Customer services & memberships" sub="Manage customer memberships, automatically linked POS plans and optional manual grants. Paid POS sales activate or renew entitlements atomically."/>
+  <Heading title="Customer memberships" sub="Verify customer access, manage paid plans, and review expiration dates in one place. POS-paid memberships appear here automatically."/>
+  <div className="membership-overview">
+   <div className="membership-hero"><strong>Membership management</strong>
+    <p>Monitor active entitlements, upcoming expirations and your customer directory.</p></div>
+   <div className="membership-metric"><small>Active</small><strong>{records.filter((p:any)=>status(p)==='Active').length}</strong></div>
+   <div className="membership-metric"><small>Expiring within 7 days</small><strong>{records.filter((p:any)=>{
+     const e=stamp(p.expires_on),now=today();
+     return status(p)==='Active'&&e!=='No expiry'&&e>=now&&e<=new Date(Date.now()+7*86400000).toISOString().slice(0,10);
+   }).length}</strong></div>
+   <div className="membership-metric"><small>Registered customers</small><strong>{(customers.data||[]).length}</strong></div>
+  </div>
   {(error||notice)&&<p role={error?'alert':'status'} className={'flash '+(error?'error':'success')}>{error||notice}</p>}
   <div className="chip-row">
    {([['memberships','Memberships'],['customers','Customers'],['plans','Service plans']] as const).map(([key,label])=>
@@ -199,8 +213,18 @@ export function CustomerServices({request,readOnly=false}:{request:Api;readOnly?
       onClick={()=>run(async()=>{await request('service-entitlements','POST',grant);setGrant(InitialGrant());},'Membership issued.')}>Issue membership</Button>
     </div>
    </Panel>
-   <Panel title="Membership register">
-    <Table items={records} columns={[
+   <Panel title="Membership register" right={<span>{filteredRecords.length} matching</span>}>
+    <div className="membership-filters">
+     <input aria-label="Search memberships" placeholder="Find customer, member ID or plan" value={lookup}
+      onChange={e=>setLookup(e.target.value)}/>
+     <select aria-label="Filter by membership status" value={memberStatus} onChange={e=>setMemberStatus(e.target.value)}>
+      <option value="all">All statuses</option>{['active','scheduled','expired','cancelled'].map(s=><option key={s} value={s}>{s}</option>)}
+     </select>
+     <select aria-label="Filter by membership plan" value={memberPlan} onChange={e=>setMemberPlan(e.target.value)}>
+      <option value="all">All plans</option>{(plans.data||[]).map((p:any)=><option key={p.id} value={p.id}>{p.name}</option>)}
+     </select>
+    </div>
+    <Table items={filteredRecords} columns={[
      ['customer_name','Customer'],['plan_name','Service'],['branch_name','Branch'],
      ['starts_on','Starts',stamp],['expires_on','Expires',stamp],
      ['effective_status','Status',(_:any,p:any)=>status(p)],

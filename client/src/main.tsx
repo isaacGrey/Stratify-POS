@@ -751,6 +751,7 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
         <SettingsPage
             key={shop}
             access={currentShop.modules}
+            businessType={currentShop.business_type}
             token={token}
             tenant={shop}
             role={role}
@@ -3864,7 +3865,7 @@ async function publicPlans() {
     return response.json();
 }
 
-function SettingsPage({ request, act, role, token, tenant, access }) {
+function SettingsPage({ request, act, role, token, tenant, access, businessType }) {
     const settingsAllowed = access?.settings !== false;
     const billingAllowed = access?.billing !== false;
     const { data: settings, load, err } = useLoad(request, settingsAllowed ? 'settings' : null);
@@ -3909,8 +3910,8 @@ function SettingsPage({ request, act, role, token, tenant, access }) {
                 <Field label="Receipt footer"><textarea value={form.receipt_footer} onChange={e => setForm({ ...form, receipt_footer: e.target.value })} /></Field>
                 {<Field label="Kitchen Display availability"><select value={form.kitchen_enabled?'enabled':'disabled'}
                     onChange={e=>setForm({...form,kitchen_enabled:e.target.value==='enabled'})}
-                    disabled={!form.kitchen_enabled && access?.kitchen===false}>
-                    {access?.kitchen!==false&&<option value="enabled">Enabled</option>}
+                    disabled={businessType!=='food'}>
+                    {businessType==='food'&&<option value="enabled">Enabled</option>}
                     <option value="disabled">Disabled</option>
                 </select><small>Non-food businesses cannot enable the kitchen module.</small></Field>}
                 <Button disabled={saving} onClick={() => save(async () => { await request('settings', 'PUT', form); load(); })}>Save settings</Button>

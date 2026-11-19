@@ -32,7 +32,7 @@ CREATE TABLE customer_appointments (
  CHECK (ends_at > starts_at),
  CHECK (ends_at <= starts_at + interval '24 hours'),
  EXCLUDE USING gist (
-   tenant_id WITH =, branch_id WITH =, resource_name WITH =,
+   tenant_id WITH =, branch_id WITH =, lower(resource_name) WITH =,
    tstzrange(starts_at,ends_at,'[)') WITH &&
  ) WHERE (status IN ('pending','confirmed','rescheduled'))
 );

@@ -32,6 +32,12 @@ export const notificationQuery=`WITH events AS (
  WHERE s.status='trial' AND s.trial_ends_at>now()
   AND s.trial_ends_at<=now()+interval '3 days'
  UNION ALL
+ SELECT 'subscription-overdue:'||s.tenant_id::text||':'||s.current_period_ends_at::date::text AS key,
+  'Subscription has expired' AS title,t.name||' · '||s.plan_id AS description,
+  'action' AS level,s.current_period_ends_at AS occurred_at
+ FROM subscriptions s JOIN tenants t ON t.id=s.tenant_id
+ WHERE s.status='active' AND s.current_period_ends_at<=now()
+ UNION ALL
  SELECT 'plan-change:'||c.id::text||':'||c.status AS key,
   CASE WHEN c.status IN ('pending','awaiting_payment') THEN 'Plan upgrade requires attention'
        WHEN c.status='applied' THEN 'Subscription upgraded' ELSE 'Plan request reviewed' END AS title,

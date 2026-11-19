@@ -60,6 +60,8 @@ export function registerOperationsReports(app,{wrap,permit}){
    if(!['xlsx','pdf'].includes(format))throw fail(400,'Unsupported export format');
    const dates=dateFilters(req.query),branchId=req.query.branch_id||null;
    if(branchId&&!/^[0-9a-f-]{36}$/i.test(branchId))throw fail(400,'Invalid branch');
+   if(req.branchIds!==null && (!branchId||!req.branchIds.includes(branchId)))
+    throw fail(403,'Select one of your assigned branches to export this report');
    const result=await scoped(req.tenant,async db=>{
     let branchName='All accessible branches';
     if(branchId){
