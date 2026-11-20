@@ -14,6 +14,8 @@ import { claimReference, createCustomerPayment, customerMethod, paymentReference
 
 import { canUseRoute, moduleAccess, validPermissions } from './workspace-access.js';
 import { platformRouter } from './admin-platform.js';
+import {registerAffiliateRoutes} from './affiliate-routes.js';
+import {attributeAffiliate,accrueVerifiedAffiliateCommission} from './affiliate-service.js';
 import { backupRouter } from './backup-routes.js';
 import { inTransaction, planId, platformAudit, priceSubscription, provisionBusiness } from './platform.js';
 import { pool, scoped, rows, one } from './db.js';
@@ -309,6 +311,8 @@ app.use('/api', wrap(async (req, _res, next) => {
     next();
 }));
 
+registerAffiliateRoutes(app,{auth,wrap});
+
 // PUBLIC ROUTES
 
 app.get('/api/health', (_req, res) => {
@@ -370,6 +374,7 @@ app.post(
             shopName,
             plan = 'free',
             business_type = 'food',
+            referral_code = null,
             skip_trial = false
         } = req.body;
 
@@ -457,6 +462,8 @@ app.post(
             const { business, subscription } = await provisionBusiness(client, {
                 ownerId: user.id, name: shopName, plan: trialPlan || selectedPlan, status: isFreeTrial ? 'trial' : 'expired', businessType:business_type
             });
+            // Attribution is immutable and committed atomically with initial signup.
+            await attributeAffiliate(client,{code:referral_code,tenantId:business.id,ownerId:user.id});
 
             await client.query('COMMIT');
 
@@ -536,7 +543,10 @@ app.post(
         const isSuperAdmin =
             Boolean(isPlatformAdmin(user));
 
-        if (!isSuperAdmin) {
+        const affiliateAccount = await one(pool,
+            `SELECT id FROM affiliate_accounts WHERE user_id=$1 AND status='active'`,
+            [user.id]);
+        if (!isSuperAdmin && !affiliateAccount) {
             const allowed = await one(
                 pool,
                 `
@@ -1042,8 +1052,11 @@ app.get(
             [req.user.id]
         );
 
+        const affiliate = await one(pool,`SELECT id FROM affiliate_accounts
+            WHERE user_id=$1 AND status='active'`,[req.user.id]);
         res.json({
             user: req.user,
+            affiliate:Boolean(affiliate),
             shops: shops.map(({ module_permissions, module_overrides, module_access, role_permissions, ...shop }) => ({
                 ...shop, modules: { ...moduleAccess({ ...shop, module_permissions, module_overrides, module_access, role_permissions }),
                   kitchen: shop.business_type==='food' && shop.kitchen_enabled===true &&
@@ -3909,11 +3922,11 @@ app.post(
             );
 
             if (!updatedPayment) {
-                throw fail(
-                    409,
-                    'Payment was already processed'
-                );
+                throw fail(409,'Payment was already processed');
             }
+            // A single paid SaaS payment earns at most one affiliate commission.
+            // Both changes roll back together if any ledger write fails.
+            const commission = await accrueVerifiedAffiliateCommission(db,updatedPayment);
 
             // Business becomes active only now.
             const activatedBusiness = await one(
@@ -3943,7 +3956,10 @@ app.post(
             await audit(db, { tenant: payment.tenant_id, user: req.user }, 'subscription.payment_verified', {
                 payment: payment.id, plan: renewed.plan_id, expires: renewed.current_period_ends_at
             });
-            await platformAudit(db, req.user, 'payment.verified', payment.id, { business: payment.tenant_id, method: payment.method });
+            await platformAudit(db, req.user, 'payment.verified', payment.id, {
+                business: payment.tenant_id, method: payment.method,
+                affiliate_commission_id: commission?.id??null
+            });
             await db.query('COMMIT');
 
             res.json({
@@ -4141,6 +4157,12 @@ app.delete(
             if(Number(operationalHistory.records)>0){
                 throw fail(409,'Business has retained operational records; archive the business or use the approved ledger-retention and erasure procedure.');
             }
+
+            // Do not erase linked affiliate referrals or commission financial history.
+            // Archival remains available instead of bypassing the financial retention policy.
+            const referred = await one(db,
+                'SELECT tenant_id FROM affiliate_referrals WHERE tenant_id=$1',[shopId]);
+            if(referred)throw fail(409,'This business has affiliate referral history; archive it instead of permanently deleting it.');
 
             // ========================================
             // 3. DELETE SHOP DEPENDENT RECORDS
