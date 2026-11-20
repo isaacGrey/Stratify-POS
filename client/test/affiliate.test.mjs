@@ -1,0 +1,40 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+const src=p=>readFileSync(new URL('../src/'+p,import.meta.url),'utf8');
+test('affiliate signup captures referral links and uses a distinct field from discounts',()=>{
+ const main=src('main.tsx');
+ assert(main.includes("get('ref')"));
+ assert(main.includes("referral_code:"));
+ assert(main.includes('Affiliate referral code (optional)'));
+ assert(main.includes('This is not a subscription discount code'));
+ assert(main.includes("discount_code: billingDiscount || undefined"));
+});
+test('affiliate account does not require or gain a merchant tenant workspace',()=>{
+ const main=src('main.tsx');
+ assert(main.includes('!data.superAdmin && !data.affiliate'));
+ assert(main.includes("if(data.affiliate && !data.shops?.length)"));
+ assert(main.includes("<AffiliatePortal token={token} logout={logout}/>"));
+ assert(main.includes("me.affiliate && !me.superAdmin && !currentShop"));
+ const portal=src('affiliate-portal.tsx');
+ assert(portal.includes("'/api/affiliate/'"));
+ assert(portal.includes('applicationOrigin||window.location.origin'));
+ assert(portal.includes('withdrawable_cents'));
+ assert(portal.includes('Request payout'));
+ assert(portal.includes("refUrl"));
+ assert(!portal.includes("X-Tenant-Id"));
+});
+test('Super Admin affiliate rate, payout, refund and commission history workflows exist',()=>{
+ const main=src('main.tsx'),admin=src('affiliate-admin.tsx'),pages=src('platform-pages.tsx');
+ assert(main.includes("['affiliates','Affiliates',Users]"));
+ assert(pages.includes("case 'affiliates'"));
+ assert(admin.includes('affiliate_default_rate_bps'));
+ assert(admin.includes('commission_rate_override_bps'));
+ assert(admin.includes("affiliate_hold_days"));
+ assert(admin.includes('affiliate_min_payout_cents'));
+ assert(admin.includes("Affiliate payout requests"));
+ assert(admin.includes("affiliates/payouts/"));
+ assert(admin.includes("decision:'rejected'"));
+ assert(main.includes("affiliates/payments/"));
+ assert(main.includes("confirmed_refunded:true"));
+});

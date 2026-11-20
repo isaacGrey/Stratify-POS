@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ApiRequest } from './types';
+import {AffiliateAdmin} from './affiliate-admin';
 import { Button, Field, Load, Modal, Panel, Table, fmt, money, pesos, useLoad } from './ui';
 
 export const moduleLabels = {
@@ -426,6 +427,7 @@ export function PlatformPage({ section,adminReq,request }) {
         case 'subscriptions': return <PlansPage adminReq={adminReq} request={request} />;
         case 'trials': return <PlansPage key="trials" adminReq={adminReq} request={request} trial />;
         case 'saas-promotions': return <SubscriptionPromotions adminReq={adminReq} request={request} />;
+        case 'affiliates': return <AffiliateAdmin adminReq={adminReq} request={request}/>;
         case 'branches': return <BranchOversight adminReq={adminReq} request={request} />;
         case 'access': return <AccessPage adminReq={adminReq} request={request} />;
         case 'activity': return <ActivityPage adminReq={adminReq} />;

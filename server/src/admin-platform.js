@@ -4,6 +4,7 @@ import { one, pool, rows } from './db.js';
 import { fail, inTransaction, planId, platformAudit, platformPlans, provisionBusiness } from './platform.js';
 import { modules, validPermissions } from './workspace-access.js';
 import {registerPlatformNotifications} from './platform-notifications.js';
+import {registerAffiliateAdminRoutes} from './affiliate-routes.js';
 
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const emailPattern = /^\S+@\S+\.\S+$/;
@@ -34,6 +35,7 @@ function fields(body, id, creating) {
 export function platformRouter(wrap) {
     const router = Router();
     registerPlatformNotifications(router,wrap);
+    registerAffiliateAdminRoutes(router,wrap);
 
     router.get('/plans', wrap(async (_req,res) => res.json(await platformPlans(pool))));
     router.post('/plans', wrap(async (req,res) => {
