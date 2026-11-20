@@ -109,7 +109,7 @@ export function registerAffiliateAdminRoutes(router,wrap){
   const {name,password,commission_rate_override_bps=null}=req.body||{};
   const address=email(req.body?.email);
   const providedCode=req.body?.referral_code;
-  if(!text(name,120)||!validEmail(address)||!text(password,200)||password.length<12||
+  if(!text(name,120)||!validEmail(address)||!text(password,200)||password.length<12||Buffer.byteLength(password)>72||
      address===email(process.env.SUPERADMIN_EMAIL))
     throw fail(400,'Provide a name, valid email and password of at least 12 characters');
   const rate=commissionRate(commission_rate_override_bps,{optional:true});
@@ -192,7 +192,7 @@ export function registerAffiliateAdminRoutes(router,wrap){
    if(payment.status==='refunded')return {ok:true,already_refunded:true};
    if(payment.status!=='paid')throw fail(409,'Only verified payments can be refunded');
    await db.query(`UPDATE subscription_payments SET status='refunded',
-     review_note=concat_ws(' | ',NULLIF(review_note,''),$2),reviewed_at=now()
+     review_note=concat_ws(' | ',NULLIF(review_note,''),$2::text),reviewed_at=now()
      WHERE id=$1 AND status='paid'`,[payment.id,reason.trim()]);
    const reversal=await reverseAffiliateCommission(db,payment.id,reason.trim());
    await platformAudit(db,req.user,'payment.refunded',payment.id,{

@@ -7,6 +7,7 @@ import { CashRegisterPanel, PurchasingPage, RefundDialog } from './operations';
 import { CustomerOrdersQueue, KitchenDisplay, MenuManagement, RegisterSummary } from './kitchen-menu';
 import { CustomerServices } from './customer-services';
 import { AppointmentsPage } from './appointments';
+import {AffiliatePortal} from './affiliate-portal';
 import {PlatformNotifications} from './platform-notifications';
 import {downloadOperationsReport} from './operations-export';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -85,6 +86,7 @@ const routes: [
 const platformNavigation: [string,string,LucideIcon][] = [
     ['dashboard','Platform dashboard',LayoutDashboard], ['users','Users',Users], ['businesses','Businesses',Store],
     ['subscriptions','Subscriptions',CreditCard], ['trials','Trials',Clock], ['saas-promotions','SaaS promotions',Tags],
+    ['affiliates','Affiliates',Users],
     ['payments','Payments',Wallet], ['branches','Branch oversight',Store], ['access','Access control',ShieldCheck],
     ['activity','Activity logs',ClipboardList], ['system','System settings',Settings], ['backups','Backups',Boxes]
 ];
@@ -96,6 +98,7 @@ function App() {
         user: ShopUser;
         shops: Workspace[];
         superAdmin?: boolean;
+        affiliate?: boolean;
     } | null>(null), [shop, setShop] = useState(localStorage.getItem('crema-shop') || ''), [page, setPage] = useState('overview'), [error, setError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState(false), [mobile, setMobile] = useState(false);
     const request: ApiRequest = useCallback(async (path, method = 'GET', body, admin = false, signal) => {
         const response = await fetch(API + '/api/' + (admin ? 'admin/' : 'shop/') + path, {
@@ -262,7 +265,7 @@ const refresh = useCallback(async () => {
         const data = await response.json();
 
         if (
-            !data.superAdmin &&
+            !data.superAdmin && !data.affiliate &&
             (
                 !Array.isArray(data.shops) ||
                 data.shops.length === 0
@@ -282,6 +285,13 @@ const refresh = useCallback(async () => {
 
         if (data.superAdmin) {
             setPage('admin');
+            return;
+        }
+        if(data.affiliate && !data.shops?.length){
+            // Platform affiliates have no merchant tenant and cannot enter POS.
+            setPage('affiliate');
+            setShop('');
+            localStorage.removeItem('crema-shop');
             return;
         }
 
@@ -476,6 +486,9 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
                 // appearing after switching users.
                 window.location.replace('/app');
             }} publicReq={publicReq}/>);
+    }
+    if(me.affiliate && !me.superAdmin && !currentShop){
+        return <AffiliatePortal token={token} logout={logout}/>;
     }
     return <div className={'shell '+(['cashier','staff'].includes(role)?'employee-shell':'management-shell')}><aside className={'sidebar ' + (mobile ? 'opened' : '')}><div className="brand">
         <div className="brand-icon">
@@ -842,6 +855,7 @@ function Auth({ onSuccess, publicReq }) {
         email: '',
         password: '',
         business_type: 'food',
+        referral_code: (new URLSearchParams(window.location.search).get('ref') || '').trim().toUpperCase().slice(0,32),
         plan: (new URLSearchParams(window.location.search).get('plan') || 'free') as SubscriptionChoice
     });
 
@@ -1424,6 +1438,12 @@ function Auth({ onSuccess, publicReq }) {
                                 </Field>
                             )}
 
+                            {mode==='register'&&<Field label="Affiliate referral code (optional)">
+                                <input value={form.referral_code} maxLength={32}
+                                  placeholder="e.g. SP-PARTNER01"
+                                  onChange={e=>updateForm('referral_code',e.target.value.toUpperCase())}/>
+                                <small>For partner referrals only. This is not a subscription discount code.</small>
+                            </Field>}
                             {mode==='register'&&<Field label="Business type">
                                 <select required value={form.business_type} onChange={e=>updateForm('business_type',e.target.value)}>
                                     <option value="food">Restaurant / food and beverage</option>
@@ -4093,6 +4113,17 @@ function PaymentReview({ payment, request, onClose, onSaved }) {
         }).catch(error => { if (!controller.signal.aborted) setReceiptError(error.message); });
         return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
     }, [payment.id, payment.submitted_at, request]);
+    async function recordRefund(){
+        if(!confirmed || !note.trim() || busy)return;
+        setBusy(true);setError('');
+        try{
+            await request('affiliates/payments/'+payment.id+'/refund','POST',{
+                confirmed_refunded:true,reason:note.trim()
+            },true);
+            onSaved();
+        }catch(e){setError(e instanceof Error?e.message:'Refund recording failed');}
+        finally{setBusy(false);}
+    }
     async function submit(approve) {
         setBusy(true);
         setError('');
@@ -4114,6 +4145,17 @@ function PaymentReview({ payment, request, onClose, onSaved }) {
             {receiptError && <p role="alert">{receiptError}</p>}
             {imageUrl && <img src={imageUrl} alt="Submitted payment receipt" style={{ maxWidth: '100%', maxHeight: '55vh', objectFit: 'contain' }} />}
             {payment.review_note && <p>{payment.review_note}</p>}
+            {payment.status==='paid' && <>
+                <p className="flash error">Record a refund only after the customer has actually received the money.
+                    This reverses affiliate commission, but subscription access requires separate administrative review.</p>
+                <label className="check"><input type="checkbox" checked={confirmed}
+                    onChange={e=>setConfirmed(e.target.checked)}/> I verified that the subscription payment was refunded.</label>
+                <Field label="Refund reason"><textarea maxLength={500} value={note}
+                    onChange={e=>setNote(e.target.value)}/></Field>
+                {error&&<p className="flash error" role="alert">{error}</p>}
+                <Button secondary disabled={busy||!confirmed||!note.trim()}
+                    onClick={()=>void recordRefund()}>Record verified refund</Button>
+            </>}
             {pending && <>
                 <Field label="Verified transaction reference"><input value={reference} maxLength={80} onChange={e => setReference(e.target.value)} /></Field>
                 <label className="check"><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
