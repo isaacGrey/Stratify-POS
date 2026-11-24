@@ -118,6 +118,11 @@ test('migrations, POS reconciliation, billing and tenant isolation', {
             }))
         }
     });
+    // Employee attendance mutations require both attendance and cashier workspace authorization.
+    await post('shop/attendance/clock-in', 403, {}, employeeSession);
+    await request('shop/staff/' + employee.id + '/access', 200, {
+        method:'PUT',account:owner,body:{module_permissions:{pos:true,attendance:true},branch_ids:[branch.id]}
+    });
     await post('shop/attendance/break-start', 409, {}, employeeSession);
     const shift = await post('shop/attendance/clock-in', 200, {}, employeeSession);
     assert.equal(shift.branch_id, branch.id);
