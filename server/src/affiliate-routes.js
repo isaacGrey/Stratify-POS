@@ -31,10 +31,22 @@ export function registerAffiliateRoutes(app,{auth,wrap}){
   const settings=await one(pool,`SELECT affiliate_default_rate_bps,affiliate_hold_days,affiliate_min_payout_cents
    FROM platform_settings WHERE singleton`);
   const balance=await affiliateBalance(pool,req.affiliate.id);
+  const performance=await one(pool,`SELECT (SELECT count(*)::int FROM affiliate_referrals r WHERE r.affiliate_id=a.id) AS referred_businesses,
+   (SELECT count(*)::int FROM affiliate_referrals r JOIN tenants t ON t.id=r.tenant_id JOIN subscriptions s ON s.tenant_id=t.id
+      WHERE r.affiliate_id=a.id AND t.status='active' AND t.archived_at IS NULL
+        AND NOT t.administratively_suspended AND s.status='active' AND s.plan_id<>'free'
+        AND s.current_period_ends_at>now()) AS active_subscriptions,
+   (SELECT COALESCE(sum(p.amount_cents),0)::bigint FROM affiliate_referrals r
+      JOIN subscription_payments p ON p.tenant_id=r.tenant_id WHERE r.affiliate_id=a.id AND p.status='paid') AS sales_cents,
+   (SELECT COALESCE(sum(c.commission_cents),0)::bigint FROM affiliate_commissions c
+      WHERE c.affiliate_id=a.id AND c.reversed_at IS NULL AND c.available_at>now()) AS pending_cents,
+   (SELECT COALESCE(sum(p.amount_cents),0)::bigint FROM affiliate_payouts p
+      WHERE p.affiliate_id=a.id AND p.status='paid') AS paid_cents
+    FROM affiliate_accounts a WHERE a.id=$1`,[req.affiliate.id]);
   res.json({affiliate:{...req.affiliate,effective_rate_bps:
     req.affiliate.commission_rate_override_bps??settings.affiliate_default_rate_bps},
    payout_minimum_cents:settings.affiliate_min_payout_cents,
-   hold_days:settings.affiliate_hold_days,balance});
+   hold_days:settings.affiliate_hold_days,balance,performance});
  }));
  router.get('/referrals',wrap(async(req,res)=>{
   const offset=queryPage(req.query.offset);
@@ -97,6 +109,16 @@ export function registerAffiliateAdminRoutes(router,wrap){
   const list=await rows(pool,`SELECT a.id,a.user_id,a.referral_code,a.status,a.commission_rate_override_bps,
    a.created_at,u.name,u.email,
    (SELECT count(*)::int FROM affiliate_referrals r WHERE r.affiliate_id=a.id) AS referred_businesses,
+   (SELECT count(*)::int FROM affiliate_referrals r JOIN tenants t ON t.id=r.tenant_id JOIN subscriptions s ON s.tenant_id=t.id
+      WHERE r.affiliate_id=a.id AND t.status='active' AND t.archived_at IS NULL
+        AND NOT t.administratively_suspended AND s.status='active' AND s.plan_id<>'free'
+        AND s.current_period_ends_at>now()) AS active_subscriptions,
+   (SELECT COALESCE(sum(p.amount_cents),0)::bigint FROM affiliate_referrals r
+      JOIN subscription_payments p ON p.tenant_id=r.tenant_id WHERE r.affiliate_id=a.id AND p.status='paid') AS sales_cents,
+   (SELECT COALESCE(sum(c.commission_cents),0)::bigint FROM affiliate_commissions c
+      WHERE c.affiliate_id=a.id AND c.reversed_at IS NULL AND c.available_at>now()) AS pending_cents,
+   (SELECT COALESCE(sum(p.amount_cents),0)::bigint FROM affiliate_payouts p
+      WHERE p.affiliate_id=a.id AND p.status='paid') AS paid_cents,
    (SELECT COALESCE(sum(c.commission_cents),0)::bigint
       FROM affiliate_commissions c WHERE c.affiliate_id=a.id AND c.reversed_at IS NULL) AS earned_cents
    FROM affiliate_accounts a JOIN users u ON u.id=a.user_id
