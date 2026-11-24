@@ -271,6 +271,8 @@ const refresh = useCallback(async () => {
                 data.shops.length === 0
             )
         ) {
+            if(data.expired_trial)sessionStorage.setItem('stratify-trial-expired','1');
+            else sessionStorage.removeItem('stratify-trial-expired');
             localStorage.removeItem('crema-token');
             localStorage.removeItem('crema-shop');
 
@@ -281,6 +283,7 @@ const refresh = useCallback(async () => {
             return;
         }
 
+        sessionStorage.removeItem('stratify-trial-expired');
         setMe(data);
 
         if (data.superAdmin) {
@@ -444,17 +447,17 @@ const currentShop = me?.shops?.find(
     const role = currentShop?.role || '';
     const canManage = ['owner', 'manager'].includes(role), canSell = ['owner', 'manager', 'cashier','staff'].includes(role);
     
-const allowed = key => currentShop?.modules?.[key] !== false;
+const allowed = key => currentShop?.modules?.[key] === true || (serverAvailable===false && key==='pos' && !!currentShop && !currentShop.modules && canSell);
 const visibleRoutes = routes.filter(([id]) => {
     if (id==='settings') return canManage && (allowed('settings') || allowed('billing'));
-    if (id==='staff') return allowed('staff') || allowed('attendance');
+    if (id==='staff') return canManage && (allowed('staff') || allowed('attendance'));
     if (id==='pos') return canSell && allowed('pos');
     if (id==='kitchen') return allowed('kitchen');
     if (id==='menu') return canManage && allowed('menu');
     if (id==='services') return (canManage||role==='cashier') && allowed('services');
     if (id==='appointments') return (canManage||role==='cashier') && allowed('appointments');
     if (['branches','promotions','products','inventory','purchasing'].includes(id)) return canManage && allowed(id);
-    if (id==='reports') return currentShop?.modules ? allowed(id) : canManage;
+    if (id==='reports') return allowed(id);
     return allowed(id);
 });
 const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
@@ -622,7 +625,7 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
             go={setPage}
         />
 )}
-{activePage==='overview' && currentShop && serverAvailable===true && canManage && <RegisterSummary request={request} role={role}/>}
+{activePage==='overview' && currentShop && serverAvailable===true && canManage && allowed('pos') && <RegisterSummary request={request} role={role}/>}
 
 
 {/* ==========================================
@@ -634,6 +637,7 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
     {['cashier','staff'].includes(role) && <div className="employee-pos-banner">
       <h2>Cashier point of sale</h2><p>Sell products and manage your own shift register. Management tools are kept separate.</p>
     </div>}
+    {serverAvailable===true && allowed('attendance') && <CashierAttendance request={request} key={shop+':'+me.user.id}/>}
     <OfflineSessionGuard
         tenantId={shop}
         online={serverAvailable}
@@ -1158,7 +1162,7 @@ function Auth({ onSuccess, publicReq }) {
 
             const needsBilling =
                 submittedMode === 'login' &&
-                /no active subscription|trial may have expired|payment is pending|subscription expired/i
+                /no active subscription|trial may have expired|payment is pending|subscription expired|free trial has expired/i
                     .test(description);
 
             if (needsBilling) {
@@ -1167,7 +1171,7 @@ function Auth({ onSuccess, publicReq }) {
                 setMode('billing');
 
                 setMessage(
-                    'Your business needs an active monthly subscription. Select Basic or Premium below.'
+                    /free trial has expired/i.test(description) ? 'Your Free Trial Has Expired! Your StratifyPOS free trial has ended. To continue using the system and access all its features, please subscribe to one of our available plans. Choose a subscription plan to restore access to your business workspace.' : 'Your business needs an active monthly subscription. Select a plan below.'
                 );
 
             } else {
@@ -1294,6 +1298,9 @@ function Auth({ onSuccess, publicReq }) {
                         BILLING / RENEWAL PAGE
                        ========================== */}
 
+                    {mode==='login'&&sessionStorage.getItem('stratify-trial-expired')==='1'&&<div className="flash error" role="alert">
+                        Your Free Trial Has Expired! Sign in with your owner credentials to view subscription plans and restore access after payment verification.
+                    </div>}
                     {mode === 'billing' ? (
                         <div className="billing-recovery">
 
@@ -1308,7 +1315,8 @@ function Auth({ onSuccess, publicReq }) {
                                 </p>
                             </div>
 
-                            <div className="billing-options">
+                            <button type="button" className="text-link" onClick={()=>document.getElementById('billing-plan-options')?.scrollIntoView({behavior:'smooth'})}>View Subscription Plans</button>
+                            <div className="billing-options" id="billing-plan-options">
                                 {plans.filter(plan => plan.price_cents > 0).map(plan => {
                                     const planId = plan.id;
 
@@ -2353,7 +2361,7 @@ function RecipeEditor({ value, ingredients, onChange }) {
                 <option value="">Select stock item</option>
                 {ingredients.map(item => <option value={item.id} key={item.id}>{item.name} ({item.unit})</option>)}
             </select>
-            <input aria-label="Recipe quantity" type="number" min="0.001" step="0.001" value={line.quantity}
+            <input aria-label={'Recipe quantity in '+(ingredients.find(item=>item.id===line.ingredient_id)?.unit||'stock units')} type="number" min="0.001" step="0.001" value={line.quantity}
                 onChange={e => update(index, { quantity: e.target.value })} />
             <button aria-label="Remove recipe item" onClick={() => onChange(value.filter((_, row) => row !== index))}><Trash2 size={17} /></button>
         </div>)}
@@ -2427,7 +2435,10 @@ function Products({ request, act, busy }) {
                 ['product_class','Class',v=>String(v||'').replaceAll('_',' ')],
                 ['price_cents', 'Base price', money],
                 ['active', 'Status', active => active ? 'Active' : 'Inactive'],
-                ['id', 'Actions', (_, item) => item.product_type==='membership'?<span>Managed in Memberships</span>:<button className="text-link" onClick={() => open(item)}>Edit</button>]
+                ['id', 'Actions', (_, item) => item.product_type==='membership'?<span>Managed in Memberships</span>:<div className="inline-form">
+                    <button className="text-link" onClick={() => open(item)}>Edit</button>
+                    {item.active&&<button className="text-link danger-link" disabled={busy} onClick={()=>{if(window.confirm('Remove '+item.name+' from sale? Transaction history is preserved.'))void act(async()=>{await request('products/'+item.id,'DELETE');load();});}}>Delete</button>}
+                </div>]
             ]} />
         </Panel>
         <Panel title="Categories" right={<div className="inline-form">
@@ -2516,6 +2527,7 @@ function Products({ request, act, busy }) {
                 <button className="text-link" onClick={() => update('variations', [...form.variations,
                     { name: '', price: form.price, sku:'', barcode:'',stock_item_id:'',recipe: [] }])}>+ Add variation</button>
                 <h4>Base recipe</h4>
+                <p className="muted">Each sale deducts the configured quantity in the stock item's own measurement unit. A custom variation recipe replaces the base recipe.</p>
                 <RecipeEditor value={form.recipe} ingredients={ingredients} onChange={recipe => update('recipe', recipe)} />
                 <label className="check"><input type="checkbox" checked={form.active} onChange={e => update('active', e.target.checked)} /> Available for sale</label>
                 <Button onClick={save} disabled={busy}>Save product</Button>
@@ -2982,7 +2994,7 @@ function Crud({
 const stockTypes = [
     ['ingredient', 'Ingredient'], ['product', 'Product'], ['supply', 'Supply'], ['material', 'Material'], ['other', 'Other']
 ];
-const newStockItem = { name: '', unit: 'g', item_type: 'ingredient', inventory_category: '', low_stock_at: '0', unit_cost_cents: 0, quantity: '0' };
+const newStockItem = { name: '', unit: 'pcs', item_type: 'product', inventory_category: '', low_stock_at: '0', unit_cost_cents: 0, quantity: '0' };
 
 function Inventory({ request, act, role, limited }) {
     const [selectedLocation, setLocation] = useState('');
@@ -3062,7 +3074,8 @@ function Inventory({ request, act, role, limited }) {
                     ? <span className="badge red">Low stock</span> : <span className="badge green">In stock</span>],
                 ['id', 'Actions', (_, row) => <div className="inline-form">
                     <button className="text-link" onClick={() => openMovement(row)}>Move stock</button>
-                    {!limited && <button className="text-link" onClick={() => openItem(row)}>Edit item</button>}
+                    {!limited && <><button className="text-link" onClick={() => openItem(row)}>Edit item</button>
+                    <button className="text-link danger-link" disabled={saving} onClick={()=>{if(window.confirm('Delete '+row.name+'? Only unused stock items with zero balance can be deleted.'))void save(async()=>{await request('ingredients/'+row.id,'DELETE');reload();});}}>Delete</button></>}
                 </div>]
             ]} />}
         </Panel>
@@ -3095,7 +3108,8 @@ function Inventory({ request, act, role, limited }) {
                     {stockTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                 </select></Field>
                 <Field label="Category"><input value={item.inventory_category} onChange={e => setItem({ ...item, inventory_category: e.target.value })} /></Field>
-                <Field label="Measurement unit"><input value={item.unit} onChange={e => setItem({ ...item, unit: e.target.value })} placeholder="g, mL, pcs" /></Field>
+                <Field label="Measurement unit"><input list="stock-units" value={item.unit} maxLength={24} onChange={e => setItem({ ...item, unit: e.target.value })} placeholder="Choose or type a custom unit" />
+                <datalist id="stock-units">{['pcs','L','mL','g','kg','m','boxes','packs','bottles'].map(unit=><option key={unit} value={unit}/>)}</datalist></Field>
                 <Field label="Reorder point"><input type="number" min="0" step=".001" value={item.low_stock_at}
                     onChange={e => setItem({ ...item, low_stock_at: e.target.value })} /></Field>
                 <Field label="Unit cost (PHP)"><input type="number" min="0" step=".01" value={item.unit_cost_cents}
@@ -3336,9 +3350,33 @@ const teamRoles = [['manager','Manager'], ['cashier','Cashier'], ['staff','Staff
 const weekDays = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const shiftDuration = seconds => seconds == null ? '—' : (Number(seconds) / 3600).toFixed(2) + ' h';
 
+function CashierAttendance({request}:{request:ApiRequest}){
+    const {data:status,load,err}=useLoad(request,'attendance/status');
+    const {data:branches}=useLoad(request,'branches');
+    const [branch,setBranch]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
+    const shift=status?.shift;
+    async function actOn(action:string){
+      if(busy)return;setBusy(true);setError('');
+      try{await request('attendance/'+action,'POST',action==='clock-in'?{branch_id:branch||null}:{});
+        load();}catch(e){setError(e instanceof Error?e.message:'Attendance failed');}finally{setBusy(false);}
+    }
+    return <Panel title="Cashier attendance">
+      <div className="padded"><p role="status">{shift?.open_break?'On break':shift?'Clocked in at '+fmt(shift.clock_in):'Clocked out'}</p>
+      {(err||error)&&<p className="flash error" role="alert">{err||error}</p>}
+      {!status&&!err?<Load/>:<div className="inline-form">
+        {!shift&&<><select aria-label="Clock-in branch" value={branch} onChange={e=>setBranch(e.target.value)}>
+          <option value="">Use scheduled branch</option>{(branches||[]).filter(b=>b.active).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select>
+          <Button disabled={busy||!status} onClick={()=>void actOn('clock-in')}><Clock size={16}/> Clock in</Button></>}
+        {shift&&!shift.open_break&&<><Button disabled={busy} onClick={()=>void actOn('break-start')}>Start break</Button>
+          <Button secondary disabled={busy} onClick={()=>void actOn('clock-out')}>Clock out</Button></>}
+        {shift?.open_break&&<Button disabled={busy} onClick={()=>void actOn('break-end')}>End break</Button>}
+      </div>}</div>
+    </Panel>;
+}
+
 function Staff({ request, act, role, setNotice, access }) {
     const manages = access?.staff !== false && (role === 'owner' || role === 'manager');
-    const attendanceAllowed = access?.attendance !== false;
+    const attendanceAllowed = access?.attendance === true;
     const { data: team, load: loadTeam } = useLoad(request, manages ? 'staff' : null);
     const { data: branchList } = useLoad(request, 'branches');
     const { data: status, load: loadStatus, err: statusError } = useLoad(request, attendanceAllowed ? 'attendance/status' : null);
@@ -3422,27 +3460,6 @@ function Staff({ request, act, role, setNotice, access }) {
                 role:'cashier',permissions:roleDefaults?.find(row => row.role==='cashier')?.permissions || {}
             })}>Role permissions</Button>}
         </div>} />
-        {attendanceAllowed && <Panel title="My attendance">
-            <div className="padded">
-                {statusError ? <p role="alert">{statusError}</p> : !status ? <Load /> : <>
-                    <p role="status">{shift?.open_break ? 'On break' : shift ? 'Clocked in at ' + fmt(shift.clock_in) : 'Clocked out'}</p>
-                    <div className="inline-form">
-                        {!shift && <>
-                            <select aria-label="Clock-in branch" value={branch} onChange={e => setBranch(e.target.value)}>
-                                <option value="">Use scheduled branch</option>
-                                {branches.filter(b => b.active).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-                            </select>
-                            <Button disabled={saving} onClick={() => attendanceAction('clock-in', 'Clocked in')}><Clock size={17} /> Clock in</Button>
-                        </>}
-                        {shift && !shift.open_break && <>
-                            <Button disabled={saving} onClick={() => attendanceAction('break-start', 'Break started')}>Start break</Button>
-                            <Button secondary disabled={saving} onClick={() => attendanceAction('clock-out', 'Clocked out')}>Clock out</Button>
-                        </>}
-                        {shift?.open_break && <Button disabled={saving} onClick={() => attendanceAction('break-end', 'Break ended')}>End break</Button>}
-                    </div>
-                </>}
-            </div>
-        </Panel>}
         {manages && <Panel title="Team members"><Table items={team || []} columns={[
             ['name','Name'], ['email','Email'], ['role','Role'], ['active','Status', active => active ? 'Active' : 'Disabled'],
             ['user_id','Actions', (_, person) => <div className="inline-form">
@@ -4190,6 +4207,7 @@ function Admin({ request, act, section }) {
     const [status, setStatus] = useState('active');
     const [expiry, setExpiry] = useState('');
     const [trialExpiry, setTrialExpiry] = useState('');
+    const [trialDays,setTrialDays]=useState('');
     const [payOpen, setPayOpen] = useState(false);
     const [paymentFilter, setPaymentFilter] = useState('');
     const [paymentForm, setPaymentForm] = useState({
@@ -4206,7 +4224,7 @@ function Admin({ request, act, section }) {
     const [actionError, setActionError] = useState('');
     const [success, setSuccess] = useState('');
     const dateInput = (value) => value
-        ? new Date(value).toISOString().slice(0, 16)
+        ? new Date(new Date(value).getTime()-new Date(value).getTimezoneOffset()*60000).toISOString().slice(0, 16)
         : '';
     const dateIso = (value) => value
         ? new Date(value).toISOString()
@@ -4260,7 +4278,8 @@ function Admin({ request, act, section }) {
     const openEdit = (shop) => {
         setEditing(shop);
         setPlan(shop.plan_id || 'free');
-        setStatus(shop.subscription_status || 'active');
+        setStatus(shop.stored_subscription_status || shop.subscription_status || 'active');
+        setTrialDays('');
         setExpiry(dateInput(shop.current_period_ends_at));
         setTrialExpiry(dateInput(shop.trial_ends_at));
         setActionError('');
@@ -4360,6 +4379,9 @@ function Admin({ request, act, section }) {
                 'Plan',
                 (value) => String(value || '—').toUpperCase()
             ],
+            ['trial_started_at','Trial start',niceDate],
+            ['trial_ends_at','Trial ends',niceDate],
+            ['trial_days_remaining','Days remaining'],
             [
                 'subscription_expires_at',
                 'Subscription expiry',
@@ -4421,18 +4443,12 @@ function Admin({ request, act, section }) {
                             '/restore', 'POST', {}, true))}>
                                             Restore
                                         </button>) : (<button className="text-link danger-link" disabled={busyAdmin} onClick={() => {
-                            const confirmation = window.prompt(`PERMANENT DELETE: ${shop.name}\n\n` +
-                                `WARNING: This will permanently remove the shop, ` +
-                                `its transactions, inventory, and subscription records.\n\n` +
-                                `Owner and staff accounts used exclusively by this ` +
-                                `shop will also be deleted, including their registered emails.\n\n` +
-                                `This action CANNOT be undone.\n\n` +
-                                `Type the EXACT shop name to confirm:`);
+                            const confirmation = window.prompt('Archive business '+shop.name+'? Access is removed, while transactions, affiliate commissions and associated records are retained. Type the exact business name to confirm:');
                             if (confirmation !== null) {
                                 run(() => request('tenants/' + shop.id, 'DELETE', { confirmation }, true));
                             }
                         }}>
-                                            Delete
+                                            Delete / archive
                                         </button>)}
                                 </div>)
             ]
@@ -4561,15 +4577,17 @@ function Admin({ request, act, section }) {
                         </Field>
 
                         <Field label="Trial expiration">
-                            <input type="datetime-local" value={trialExpiry} onChange={(e) => setTrialExpiry(e.target.value)}/>
+                            <input type="datetime-local" value={trialExpiry} onChange={(e) => {setTrialExpiry(e.target.value);setTrialDays('');}}/>
                         </Field>
 
+                        {status==='trial'&&<Field label="Trial duration in days (optional; from original trial start)"><input type="number" min="1" max="365" value={trialDays} onChange={e=>setTrialDays(e.target.value)}/></Field>}
                         <Button disabled={busyAdmin} onClick={() => run(async () => {
                 await request('subscriptions/' + editing.id, 'PATCH', {
                     plan_id: plan,
                     status,
                     current_period_ends_at: dateIso(expiry),
-                    trial_ends_at: dateIso(trialExpiry)
+                    trial_ends_at: dateIso(trialExpiry),
+                    ...(status==='trial' && trialDays!=='' ? {trial_days:Number(trialDays)} : {})
                 }, true);
                 setEditing(null);
             })}>
