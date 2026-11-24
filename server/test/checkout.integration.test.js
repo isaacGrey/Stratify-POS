@@ -118,22 +118,26 @@ test('migrations, POS reconciliation, billing and tenant isolation', {
             }))
         }
     });
-    // Employee attendance mutations require both attendance and cashier workspace authorization.
-    await post('shop/attendance/clock-in', 403, {}, employeeSession);
-    await request('shop/staff/' + employee.id + '/access', 200, {
-        method:'PUT',account:owner,body:{module_permissions:{pos:true,attendance:true},branch_ids:null}
-    });
-    await post('shop/attendance/break-start', 409, {}, employeeSession);
-    const shift = await post('shop/attendance/clock-in', 200, {}, employeeSession);
-    assert.equal(shift.branch_id, branch.id);
-    assert.equal(shift.late_minutes, Math.ceil((Date.parse(shift.clock_in) - Date.parse(shift.scheduled_start_at)) / 60000));
-    await post('shop/attendance/clock-in', 409, {}, employeeSession);
-    await post('shop/attendance/break-start', 200, {}, employeeSession);
-    await post('shop/attendance/break-start', 409, {}, employeeSession);
-    await post('shop/attendance/clock-out', 409, {}, employeeSession);
-    await post('shop/attendance/break-end', 200, {}, employeeSession);
-    await post('shop/attendance/break-end', 409, {}, employeeSession);
-    await post('shop/attendance/clock-out', 200, {}, employeeSession);
+    // Every employee, including a non-POS staff account, must reauthenticate.
+    const credentials={employee_id:employee.id,username:employeeEmail,password};
+    const employees=await request('shop/attendance/employees',200,{account:employeeSession});
+    assert(employees.some(person=>person.id===employee.id));
+    assert(employees.every(person=>!('password_hash' in person)&&!('email' in person)));
+    await post('shop/attendance/clock-in',400,{},employeeSession);
+    await post('shop/attendance/clock-in',403,{...credentials,password:'wrong-password'},employeeSession);
+    await post('shop/attendance/clock-in',403,{...credentials,employee_id:outsider.user.id},employeeSession);
+    await post('shop/attendance/break-start',409,credentials,employeeSession);
+    const shift=await post('shop/attendance/clock-in',200,credentials,employeeSession);
+    assert.equal(shift.user_id,employee.id);
+    assert.equal(shift.branch_id,branch.id);
+    assert.equal(shift.late_minutes,Math.ceil((Date.parse(shift.clock_in)-Date.parse(shift.scheduled_start_at))/60000));
+    await post('shop/attendance/clock-in',409,credentials,employeeSession);
+    await post('shop/attendance/break-start',200,credentials,employeeSession);
+    await post('shop/attendance/break-start',409,credentials,employeeSession);
+    await post('shop/attendance/clock-out',409,credentials,employeeSession);
+    await post('shop/attendance/break-end',200,credentials,employeeSession);
+    await post('shop/attendance/break-end',409,credentials,employeeSession);
+    await post('shop/attendance/clock-out',200,credentials,employeeSession);
     const history = await request('shop/attendance?user_id=' + owner.user.id, 200, { account: employeeSession });
     assert.deepEqual(history.map(row => row.user_id), [employee.id]);
     const attendance = await request('shop/attendance/summary', 200, { account: owner });
@@ -482,6 +486,41 @@ test('migrations, POS reconciliation, billing and tenant isolation', {
         const base = plans.find(plan => plan.id === 'basic');
         await request('admin/plans/basic/modules', 200, { method:'PUT',account:admin,body:{ modules:base.module_access } });
     }
+    // Explicit platform approval and denial must affect both /me and direct API calls.
+    const approvalPath='admin/users/'+employee.id+'/workspaces/'+owner.shop.id;
+    assert.equal((await request('me',200,{account:employeeSession})).shops[0].modules.appointments,false);
+    await request('shop/appointments',403,{account:employeeSession});
+    await request(approvalPath,403,{method:'PUT',account:owner,body:{enabled:true,modules:{appointments:true}}});
+    await request(approvalPath,200,{method:'PUT',account:admin,body:{enabled:true,modules:{appointments:true,reports:false}}});
+    assert.equal((await request('me',200,{account:employeeSession})).shops[0].modules.appointments,true);
+    await request('shop/reports?period=daily',403,{account:employeeSession});
+    await request(approvalPath,200,{method:'PUT',account:admin,body:{enabled:false,modules:{appointments:true}}});
+    assert.equal((await request('me',200,{account:employeeSession})).shops.length,0);
+    await request('shop/appointments',403,{account:employeeSession});
+    await request(approvalPath,200,{method:'PUT',account:admin,body:{enabled:true,modules:{}}});
+    assert.equal((await request('me',200,{account:employeeSession})).shops[0].modules.appointments,false);
+
+    // Disposable business and user deletion must remove live rows, not merely archive them.
+    const removableEmail='removable-'+nonce+'@example.invalid';
+    const removable=await register('removable');
+    const removableBranch=(await request('shop/branches',200,{account:removable}))[0];
+    const removableStaffEmail='removable-staff-'+nonce+'@example.invalid';
+    const removableStaff=await post('shop/staff',200,{name:'Disposable staff',email:removableStaffEmail,password,role:'staff'},removable);
+    await request('admin/tenants/'+removable.shop.id,403,{method:'DELETE',account:removable,body:{confirmation:'removable '+nonce}});
+    await request('admin/tenants/'+removable.shop.id,400,{method:'DELETE',account:admin,body:{confirmation:'wrong'}});
+    await request('admin/users/'+removable.user.id,409,{method:'DELETE',account:admin,body:{confirmation:removableEmail}});
+    const deleted=await request('admin/tenants/'+removable.shop.id,200,{method:'DELETE',account:admin,body:{confirmation:'removable '+nonce}});
+    assert.equal(deleted.deleted_user_count,2);
+    assert.equal((await pool.query('SELECT id FROM tenants WHERE id=$1',[removable.shop.id])).rowCount,0);
+    assert.equal((await pool.query('SELECT id FROM branches WHERE id=$1',[removableBranch.id])).rowCount,0);
+    assert.equal((await pool.query('SELECT id FROM users WHERE id=ANY($1::uuid[])',[[removable.user.id,removableStaff.id]])).rowCount,0);
+    await request('me',401,{account:removable});
+    const unusedEmail='unused-'+nonce+'@example.invalid';
+    const unused=await post('admin/users',201,{name:'Unused account',email:unusedEmail,password},admin);
+    await request('admin/users/'+unused.id,200,{method:'DELETE',account:admin,body:{confirmation:unusedEmail}});
+    assert.equal((await pool.query('SELECT id FROM users WHERE id=$1',[unused.id])).rowCount,0);
+    await request('admin/tenants/'+owner.shop.id,409,{method:'DELETE',account:admin,body:{confirmation:'owner '+nonce}});
+    assert.equal((await pool.query('SELECT id FROM tenants WHERE id=$1',[owner.shop.id])).rowCount,1);
     const planKey = 'pkg-' + nonce;
     await post('admin/plans', 201, { id:planKey,title:'Custom business plan',price_cents:100000,
         max_branches:4,max_staff:12 }, admin);

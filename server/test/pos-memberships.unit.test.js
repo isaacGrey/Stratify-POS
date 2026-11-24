@@ -6,7 +6,7 @@ import {expiryFrom} from '../src/service-routes.js';
 test('cashier gets limited service lookup even when branch-scoped, with no membership changes',()=>{
  const branchIds=['00000000-0000-4000-8000-000000000001'];
  const row={role:'cashier',branch_ids:branchIds,module_permissions:{},role_permissions:{},
-  module_access:{},module_overrides:{}};
+  module_access:{},module_overrides:{services:true}};
  const access=moduleAccess(row);
  assert.equal(access.services,true);
  for(const path of ['/service-plans','/service-customers','/service-entitlements',

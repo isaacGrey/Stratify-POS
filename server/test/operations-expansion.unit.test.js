@@ -47,7 +47,7 @@ test('generated operations Excel and PDF files contain expected headers',async()
 });
 test('appointment and inventory reports use explicit module permissions',()=>{
  const access=moduleAccess({role:'cashier',branch_ids:[uuid],
-  module_permissions:{},role_permissions:{},module_access:{},module_overrides:{}});
+  module_permissions:{},role_permissions:{},module_access:{},module_overrides:{appointments:true}});
  assert.equal(access.appointments,true);
  assert.equal(canUseRoute('/appointments','GET',access,[uuid]),true);
  assert.equal(canUseRoute('/appointments','POST',access,[uuid]),true);
@@ -59,4 +59,15 @@ test('appointment and inventory reports use explicit module permissions',()=>{
  const restricted=moduleAccess({role:'manager',branch_ids:null,
   module_permissions:{appointments:false},role_permissions:{},module_access:{},module_overrides:{}});
  assert.equal(canUseRoute('/appointments','GET',restricted,null),false);
+});
+
+test('manual features fail closed and platform denies override merchant grants',()=>{
+ const base={role:'owner',branch_ids:null,module_permissions:{services:true,appointments:true},module_access:{},module_overrides:{}};
+ assert.equal(moduleAccess(base).services,false);assert.equal(moduleAccess(base).appointments,false);
+ assert.equal(moduleAccess({...base,module_overrides:{services:true}}).services,true);
+ assert.equal(moduleAccess({...base,admin_module_permissions:{appointments:true}}).appointments,true);
+ assert.equal(moduleAccess({...base,module_overrides:{services:true},admin_module_permissions:{services:false}}).services,false);
+ assert.equal(moduleAccess({...base,module_overrides:{appointments:false},admin_module_permissions:{appointments:true}}).appointments,false);
+ assert.equal(Object.values(moduleAccess({...base,admin_workspace_enabled:false})).some(Boolean),false);
+ assert.equal(canUseRoute('/attendance/clock-in','POST',moduleAccess({role:'staff',branch_ids:null}),null),true);
 });

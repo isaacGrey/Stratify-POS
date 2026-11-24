@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import pg from 'pg';
 import {test} from 'node:test';
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
@@ -37,6 +38,9 @@ test('business classification, kitchen restrictions, appointment booking and rep
  });
  const cafe=await register('cafe','food');
  const clinic=await register('clinic','non_food');
+ const approvalDb=new pg.Pool({connectionString:database});
+ t.after(()=>approvalDb.end());
+ for(const account of [cafe,clinic])await approvalDb.query('UPDATE tenants SET module_overrides=$2 WHERE id=$1',[account.shop.id,{"appointments":true}]);
  const cafeMe=await send('me',200,{account:cafe});
  const clinicMe=await send('me',200,{account:clinic});
  assert.equal(cafeMe.shops[0].business_type,'food');

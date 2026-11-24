@@ -66,6 +66,8 @@ function UsersPage({ adminReq, request }) {
     const page = usePage(adminReq,'users','business='+encodeURIComponent(business));
     const [form,setForm] = useState(null);
     const action = useSave(request);
+    const {data:workspaces,load:reloadWorkspaces,err:workspaceError}=useLoad(adminReq,form?.id?'users/'+form.id+'/workspaces':null);
+    const [workspace,setWorkspace]=useState(null);
     const change = (key,value) => setForm({ ...form,[key]:value });
     const finish = () => { setForm(null); page.load(); };
     return <Panel title="Platform users" right={<Button onClick={() => {
@@ -76,12 +78,12 @@ function UsersPage({ adminReq, request }) {
           <input aria-label="Filter users by business" placeholder="Filter by business name" value={business}
             maxLength={120} onChange={e=>{setBusiness(e.target.value);page.setPage(0);}}/>
         </div>
-        {errorText(page.err)}
+        {errorText(page.err || action.error)}
         {page.data ? <Table items={page.data} columns={[
             ['name','Name'], ['email','Email'], ['business_names','Businesses'], ['active','State',(_,row) => userState(row)], ['workspaces','Workspaces'],
-            ['id','Action',(_,row) => row.platform_admin ? 'Super Admin' : <button className="text-link" onClick={() => {
-                action.clear(); setForm({ ...row,state:'' });
-            }}>Manage</button>]
+            ['id','Action',(_,row) => row.platform_admin ? 'Super Admin' : <div className="inline-form"><button className="text-link" onClick={() => {
+                action.clear(); setWorkspace(null);setForm({ ...row,state:'' });
+            }}>Manage</button><button className="text-link danger-link" disabled={action.busy} onClick={()=>{const confirmation=window.prompt('Permanently delete '+row.email+'? Type its exact email.');if(confirmation!==null)void action.save('users/'+row.id,'DELETE',{confirmation},finish);}}>Delete</button></div>]
         ]} /> : !page.err && <Load />}
         <Pagination {...page} more={page.data?.length===50} />
         {form && <Modal title={form.id ? 'Manage user' : 'Create user'} onClose={() => setForm(null)}><div className="modal-body">
@@ -92,11 +94,12 @@ function UsersPage({ adminReq, request }) {
                     <option value="">Keep current state</option><option value="active">Activate or restore</option>
                     <option value="suspended">Suspend</option><option value="deactivated">Deactivate</option><option value="archived">Archive</option>
                 </select></Field>}
+            {form.id&&<><h3>Platform workspace access</h3><p>Block an entire workspace or approve individual modules. Memberships and appointments require explicit platform approval.</p>{errorText(workspaceError)}{(workspaces||[]).map(row=><div key={row.tenant_id} className="inline-form"><span>{row.name} · {row.admin_workspace_enabled?'Enabled':'Blocked'}</span><Button secondary onClick={()=>setWorkspace({...row,modules:row.admin_module_permissions||{}})}>Edit access</Button></div>)}{workspace&&<><label className="check"><input type="checkbox" checked={workspace.admin_workspace_enabled} onChange={e=>setWorkspace({...workspace,admin_workspace_enabled:e.target.checked})}/> Workspace enabled</label><PermissionFields value={workspace.modules} onChange={modules=>setWorkspace({...workspace,modules})} inherited="Inherit business / role (manual features off by default)"/><Button disabled={action.busy} onClick={()=>action.save('users/'+form.id+'/workspaces/'+workspace.tenant_id,'PUT',{enabled:workspace.admin_workspace_enabled,modules:workspace.modules},()=>{setWorkspace(null);reloadWorkspaces();})}>Save workspace access</Button></>}</>}
             {errorText(action.error)}
             <div className="inline-form">
                 <Button disabled={action.busy} onClick={() => action.save(form.id ? 'users/'+form.id : 'users',form.id ? 'PATCH' : 'POST',
                     { name:form.name,email:form.email,password:form.password,state:form.state || undefined },finish)}>Save user</Button>
-                {form.id && !form.active && <Button secondary disabled={action.busy} onClick={() => {
+                {form.id && <Button secondary disabled={action.busy} onClick={() => {
                     const confirmation = window.prompt('Enter the exact email address to permanently delete this account.');
                     if (confirmation !== null) void action.save('users/'+form.id,'DELETE',{ confirmation },finish);
                 }}>Delete account</Button>}
@@ -187,7 +190,7 @@ function AccessPage({ adminReq,request }) {
                 ['id','Action',(_,row) => <button className="text-link" onClick={() => edit(row,'plans')}>Edit entitlements</button>]
             ]} />
         </Panel>
-        <Panel title="Business overrides">
+        <Panel title="Business overrides"><p className="padded">Customer Memberships and Appointment Scheduling are blocked by default. Set Allow explicitly on a business or its user workspace to approve them; plan or business blocks still take precedence.</p>
             <div className="padded"><input aria-label="Find business" placeholder="Find business" value={page.search} onChange={e => page.setSearch(e.target.value)} /></div>
             <Table items={page.data?.businesses || []} columns={[
                 ['name','Business'], ['plan_id','Plan'],
@@ -196,7 +199,7 @@ function AccessPage({ adminReq,request }) {
             <Pagination {...page} more={page.data?.businesses.length===50} />
         </Panel>
         {form && <Modal title={form.name + ' module access'} onClose={() => setForm(null)}><div className="modal-body">
-            <PermissionFields value={form.modules} onChange={modules => setForm({ ...form,modules })} inherited={form.resource==='tenants' ? 'Use plan' : 'Enabled'} />
+            <PermissionFields value={form.modules} onChange={modules => setForm({ ...form,modules })} inherited={form.resource==='tenants' ? 'Inherit (manual features off by default)' : 'Enabled'} />
             {errorText(action.error)}
             <Button disabled={action.busy} onClick={() => action.save(form.resource+'/'+form.id+'/modules','PUT',{ modules:form.modules },
                 () => { setForm(null); page.load(); })}>Save access</Button>

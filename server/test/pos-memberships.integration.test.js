@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import pg from 'pg';
 import {test} from 'node:test';
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
@@ -44,6 +45,9 @@ test('multi-industry sales, cashier reception lookup and atomic POS membership l
  });
  const owner=await register('member-owner');
  const stranger=await register('member-stranger');
+ const approvalDb=new pg.Pool({connectionString:database});
+ t.after(()=>approvalDb.end());
+ for(const account of [owner,stranger])await approvalDb.query('UPDATE tenants SET module_overrides=$2 WHERE id=$1',[account.shop.id,{"services":true}]);
  const [branch]=await request('shop/branches',200,{account:owner});
  const [otherBranch]=await request('shop/branches',200,{account:stranger});
  const cashierMail='pos-cashier-'+nonce+'@example.invalid';
