@@ -16,7 +16,16 @@ const publicMenuLimit=async(token)=>{
  JOIN branches b ON b.tenant_id=l.tenant_id AND b.id=l.branch_id
  JOIN tables t ON t.tenant_id=l.tenant_id AND t.id=l.table_id AND t.branch_id=l.branch_id
  JOIN shop_settings s ON s.tenant_id=l.tenant_id
- WHERE l.token_hash=$1 AND l.active=true AND l.revoked_at IS NULL AND b.active=true`,[hash(token)]);
+ JOIN tenants business ON business.id=l.tenant_id
+ JOIN subscriptions sub ON sub.tenant_id=business.id
+ JOIN plans p ON p.id=sub.plan_id
+ WHERE l.token_hash=$1 AND l.active=true AND l.revoked_at IS NULL AND b.active=true
+ AND business.status='active' AND business.archived_at IS NULL AND NOT business.administratively_suspended
+ AND business.business_type='food'
+ AND business.module_overrides->>'menu' IS DISTINCT FROM 'false'
+ AND p.module_access->>'menu' IS DISTINCT FROM 'false'
+ AND ((sub.status='trial' AND sub.trial_ends_at>now())
+   OR (sub.status='active' AND sub.plan_id<>'free' AND sub.current_period_ends_at>now()))`,[hash(token)]);
  if(!row||!row.enabled)throw problems(404,'Menu not available');
  return row;
 };
