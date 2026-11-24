@@ -8,7 +8,8 @@ type Balance={lifetime_earned_cents:number;pending_cents:number;reversed_cents:n
  paid_out_cents:number;reserved_cents:number;available_cents:number;withdrawable_cents:number};
 type Profile={affiliate:{id:string;name:string;email:string;referral_code:string;
  effective_rate_bps:number;commission_rate_override_bps:number|null};
- balance:Balance;payout_minimum_cents:number;hold_days:number};
+ balance:Balance;payout_minimum_cents:number;hold_days:number;
+ performance:{referred_businesses:number;active_subscriptions:number;sales_cents:string}};
 type Referral={tenant_id:string;business_name:string;plan_id:string;
  subscription_status:string;attributed_at:string};
 type Commission={id:string;payment_id:string;business_name:string;
@@ -83,6 +84,12 @@ export function AffiliatePortal({token,logout}:{token:string;logout:()=>void}){
       <div><span>Available balance</span><strong>{money(available)}</strong><small>Eligible for payout</small></div>
       <div><span>Pending release</span><strong>{money(profile.balance.pending_cents)}</strong><small>{profile.hold_days}-day commission hold at current settings</small></div>
       <div><span>Paid out</span><strong>{money(profile.balance.paid_out_cents)}</strong><small>Confirmed transfers</small></div>
+     </div>
+     <div className="affiliate-metrics">
+      <div><span>Total referred businesses</span><strong>{profile.performance?.referred_businesses??0}</strong><small>Attributed signup records</small></div>
+      <div><span>Successful registrations</span><strong>{profile.performance?.referred_businesses??0}</strong><small>Completed business signup</small></div>
+      <div><span>Active paid subscriptions</span><strong>{profile.performance?.active_subscriptions??0}</strong><small>Currently active and verified</small></div>
+      <div><span>Verified subscription sales</span><strong>{money(Number(profile.performance?.sales_cents??0))}</strong><small>Excludes refunded payments</small></div>
      </div>
      <div className="affiliate-two-col">
       <Panel title="Your referral link">
