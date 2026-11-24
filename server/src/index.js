@@ -172,7 +172,7 @@ const tenant = wrap(async (req, res, next) => {
             s.plan_id,
             s.status AS subscription_status,
             s.trial_ends_at,
-            s.current_period_ends_at, m.module_permissions, m.branch_ids, t.business_type,ks.kitchen_enabled, t.module_overrides, p.module_access, wr.permissions AS role_permissions
+            s.current_period_ends_at, m.module_permissions, m.admin_module_permissions, m.admin_workspace_enabled, m.branch_ids, t.business_type,ks.kitchen_enabled, t.module_overrides, p.module_access, wr.permissions AS role_permissions
 
         FROM tenants t
 
@@ -187,7 +187,7 @@ const tenant = wrap(async (req, res, next) => {
 
         WHERE t.id = $1
           AND m.user_id = $2
-          AND m.active = TRUE
+          AND m.active = TRUE AND m.admin_workspace_enabled
           AND t.status = 'active' AND NOT t.administratively_suspended
           AND t.archived_at IS NULL
         `,
@@ -228,6 +228,7 @@ const tenant = wrap(async (req, res, next) => {
     req.role = access.role;
     req.businessType=access.business_type;
     req.modules = moduleAccess(access);
+    if(!Object.values(req.modules).some(Boolean))throw fail(403,'Business unavailable or access denied');
     req.modules.kitchen = req.modules.kitchen && access.business_type==='food' && access.kitchen_enabled===true;
     req.branchIds = access.branch_ids ?? null;
 
@@ -1019,7 +1020,7 @@ app.get(
                 s.plan_id,
                 s.status AS subscription_status,
                 s.trial_ends_at,
-                s.current_period_ends_at,m.branch_ids,m.module_permissions,t.business_type,ks.kitchen_enabled,t.module_overrides,p.module_access,wr.permissions AS role_permissions
+                s.current_period_ends_at,m.branch_ids,m.module_permissions,m.admin_module_permissions,m.admin_workspace_enabled,t.business_type,ks.kitchen_enabled,t.module_overrides,p.module_access,wr.permissions AS role_permissions
 
             FROM memberships m
 
@@ -1033,7 +1034,7 @@ app.get(
             LEFT JOIN workspace_role_permissions wr ON wr.tenant_id=t.id AND wr.role=m.role
 
             WHERE m.user_id = $1
-              AND m.active = TRUE
+              AND m.active = TRUE AND m.admin_workspace_enabled
               AND t.status = 'active' AND NOT t.administratively_suspended
               AND t.archived_at IS NULL
 
@@ -1065,10 +1066,10 @@ app.get(
                 WHERE m.user_id=$1 AND m.active AND t.archived_at IS NULL
                   AND NOT t.administratively_suspended AND s.status IN ('trial','expired')
                   AND s.trial_ends_at<=now()) AS expired`,[req.user.id]))?.expired),
-            shops: shops.map(({ module_permissions, module_overrides, module_access, role_permissions, ...shop }) => ({
-                ...shop, modules: { ...moduleAccess({ ...shop, module_permissions, module_overrides, module_access, role_permissions }),
+            shops: shops.filter(row=>Object.values(moduleAccess(row)).some(Boolean)).map(({ module_permissions, module_overrides, module_access, role_permissions, admin_module_permissions, admin_workspace_enabled, ...shop }) => ({
+                ...shop, modules: { ...moduleAccess({ ...shop, module_permissions, module_overrides, module_access, role_permissions, admin_module_permissions, admin_workspace_enabled }),
                   kitchen: shop.business_type==='food' && shop.kitchen_enabled===true &&
-                    moduleAccess({ ...shop,module_permissions,module_overrides,module_access,role_permissions }).kitchen }
+                    moduleAccess({ ...shop,module_permissions,module_overrides,module_access,role_permissions,admin_module_permissions,admin_workspace_enabled }).kitchen }
             })),
             superAdmin:
                 Boolean(isPlatformAdmin(req.user))
@@ -1441,7 +1442,7 @@ app.delete(
 // PRODUCTS
 
 app.get('/api/shop/products', data(async (db, req) => {
-    const products = await listProducts(db, req.tenant);
+    const products = (await listProducts(db, req.tenant)).filter(product=>req.modules.services || product.product_type!=='membership');
     if (req.modules.products) return products;
     return products.map(({ cost_cents, recipe, stock_item_id, variations, ...product }) => ({ ...product,
         variations: variations.map(({ recipe, ...variant }) => variant) }));
@@ -2500,17 +2501,52 @@ app.delete(
 
 // ATTENDANCE
 
-const teamManager = req => ['owner', 'manager'].includes(req.role);
+const teamManager = req => req.modules.staff===true && ['owner', 'manager'].includes(req.role);
 app.get('/api/shop/attendance/status', data(async (db, req) =>
     ({ shift: await attendanceStatus(db, req.tenant, req.user.id) ?? null })));
 
+// The shared terminal only exposes eligible names. Password hashes never enter the
+// restricted workspace API or the client; credential checks use the privileged connection.
+const attendanceMemberQuery = `
+ SELECT u.id,u.name,u.email,u.password_hash,m.role,m.branch_ids,m.module_permissions,
+  m.admin_module_permissions,m.admin_workspace_enabled,t.module_overrides,p.module_access,wr.permissions AS role_permissions
+ FROM memberships m JOIN users u ON u.id=m.user_id JOIN tenants t ON t.id=m.tenant_id
+ JOIN subscriptions s ON s.tenant_id=t.id JOIN plans p ON p.id=s.plan_id
+ LEFT JOIN workspace_role_permissions wr ON wr.tenant_id=t.id AND wr.role=m.role
+ WHERE m.tenant_id=$1 AND m.active AND m.admin_workspace_enabled AND u.active
+ AND u.suspended_at IS NULL AND u.archived_at IS NULL AND NOT u.platform_admin
+ AND t.status='active' AND NOT t.administratively_suspended AND t.archived_at IS NULL
+ AND ((s.status='trial' AND s.trial_ends_at>now()) OR
+ (s.plan_id<>'free' AND s.status='active' AND s.current_period_ends_at>now()))`;
+function attendanceBranches(caller,target){
+ if(caller===null)return target??null;
+ if(target==null)return caller;
+ return caller.filter(id=>target.includes(id));
+}
+function eligibleAttendance(req,member){
+ const scope=attendanceBranches(req.branchIds,member.branch_ids);
+ return moduleAccess(member).attendance===true && (scope===null||scope.length>0);
+}
+app.get('/api/shop/attendance/employees',wrap(async(req,res)=>{
+ const employees=await rows(pool,attendanceMemberQuery+' ORDER BY u.name,u.id',[req.tenant]);
+ res.json(employees.filter(member=>eligibleAttendance(req,member)).map(({id,name})=>({id,name})));
+}));
+const attendanceCredentialLimit=rateLimit({windowMs:15*60*1000,limit:40,standardHeaders:'draft-7',legacyHeaders:false});
 for (const action of ['clock-in', 'clock-out', 'break-start', 'break-end']) {
-    app.post('/api/shop/attendance/' + action, data((db, req) => {
-        if(!req.modules.pos || !req.modules.attendance)throw fail(403,'Attendance recording requires cashier workspace access');
-        const branch = req.body?.branch_id || (req.branchIds?.length === 1 ? req.branchIds[0] : null);
-        need(!branch || ident(branch), 'Invalid branch');
-        return recordAttendance(db, req.tenant, req.user.id, action, branch, req.branchIds !== null);
-    }));
+ app.post('/api/shop/attendance/'+action,attendanceCredentialLimit,wrap(async(req,res)=>{
+  const {employee_id,username,password,branch_id}=req.body||{};
+  need(ident(employee_id)&&typeof username==='string'&&username.length<=254&&typeof password==='string'&&password.length>0&&Buffer.byteLength(password)<=72,'Select an employee and enter their login email and password');
+  const member=await one(pool,attendanceMemberQuery+' AND u.id=$2',[req.tenant,employee_id]);
+  if(!member||!eligibleAttendance(req,member)||email(username)!==email(member.email)||!await bcrypt.compare(password,member.password_hash))
+   throw fail(403,'Employee credentials or attendance access are invalid');
+  const scope=attendanceBranches(req.branchIds,member.branch_ids);
+  const branch=branch_id||(scope?.length===1?scope[0]:null);
+  need(!branch||ident(branch),'Invalid branch');
+  if(branch&&scope!==null&&!scope.includes(branch))throw fail(403,'Branch not authorized for this employee');
+  const result=await scoped(req.tenant,db=>recordAttendance(db,req.tenant,member.id,action,branch,scope!==null),
+   {branchIds:scope,userId:member.id});
+  res.json(result);
+ }));
 }
 
 app.get('/api/shop/attendance', data((db, req) => {
@@ -4068,7 +4104,7 @@ app.patch(
  * All operations execute in one transaction.
  */
 
-app.delete('/api/admin/tenants/:id',wrap(async(req,res)=>{
+app.post('/api/admin/tenants/:id/archive',wrap(async(req,res)=>{
     need(ident(req.params.id),'Invalid shop ID');
     const result=await inTransaction(pool,async db=>{
         const shop=await one(db,'SELECT id,name,archived_at FROM tenants WHERE id=$1 FOR UPDATE',[req.params.id]);
@@ -4081,6 +4117,41 @@ app.delete('/api/admin/tenants/:id',wrap(async(req,res)=>{
         return archived;
     });
     res.json({ok:true,archived:true,business:result,message:'Business removed from active workspaces. Associated records and financial history retained.'});
+}));
+
+// Explicit irreversible removal for businesses without protected financial journals.
+// The entire operation rolls back on any dependency, including unknown future foreign keys.
+app.delete('/api/admin/tenants/:id',wrap(async(req,res)=>{
+ need(ident(req.params.id),'Invalid business ID');
+ try{
+ const result=await inTransaction(pool,async db=>{
+  const shop=await one(db,'SELECT id,name FROM tenants WHERE id=$1 FOR UPDATE',[req.params.id]);
+  if(!shop)throw fail(404,'Business not found');
+  need(req.body?.confirmation===shop.name,'Type the exact business name to confirm deletion');
+  const id=shop.id;
+  const protectedTables=['orders','subscription_payments','register_sessions','register_movements','sales_refunds','purchase_orders','order_cost_components','service_entitlements','service_entitlement_events','affiliate_referrals','loyalty_movements'];
+  for(const table of protectedTables){
+   if(await one(db,'SELECT 1 FROM '+table+' WHERE tenant_id=$1 LIMIT 1',[id]))
+    throw fail(409,'Business has protected transaction or financial history. Archive it instead; permanent deletion requires an approved retention procedure.');
+  }
+  const users=await rows(db,`SELECT u.id,u.email FROM users u JOIN memberships m ON m.user_id=u.id
+   WHERE m.tenant_id=$1 AND NOT u.platform_admin AND lower(u.email)<>lower($2)
+   AND NOT EXISTS(SELECT 1 FROM memberships other WHERE other.user_id=u.id AND other.tenant_id<>$1)
+   AND NOT EXISTS(SELECT 1 FROM affiliate_accounts aa WHERE aa.user_id=u.id) FOR UPDATE OF u`,[id,process.env.SUPERADMIN_EMAIL||'']);
+  const cleanup=['customer_order_requests','kitchen_tickets','public_menu_links','parked_orders','customer_appointments','service_plans','service_customers','attendance_breaks','attendance','work_schedules','variation_recipes','addon_recipes','catalog_identifiers','stock_movements','recipes','variations','loyalty_accounts','audit_logs','plan_change_requests','invites','workspace_role_permissions','memberships','expenses','promotions','addons','suppliers','tables','products','categories','branch_stock_balances','ingredients','branch_weekly_hours','branch_date_overrides','branches','shop_settings','subscriptions'];
+  for(const table of cleanup)await db.query('DELETE FROM '+table+' WHERE tenant_id=$1',[id]);
+  await db.query('DELETE FROM tenants WHERE id=$1',[id]);
+  for(const user of users){
+   await db.query('DELETE FROM password_tokens WHERE user_id=$1',[user.id]);
+   await db.query('DELETE FROM invites WHERE lower(email)=lower($1) AND accepted_at IS NULL',[user.email]);
+   const removed=await db.query('DELETE FROM users WHERE id=$1 AND NOT platform_admin AND NOT EXISTS(SELECT 1 FROM memberships WHERE user_id=$1)',[user.id]);
+   if(removed.rowCount!==1)throw fail(409,'Account dependencies changed; no deletion was committed');
+  }
+  await platformAudit(db,req.user,'business.deleted',id,{deleted_user_count:users.length});
+  return {ok:true,deleted:true,deleted_shop:shop,deleted_user_count:users.length};
+ });
+ res.json(result);
+ }catch(error){if(error.code==='23503')throw fail(409,'Related records prevent permanent deletion; no records were removed. Archive the business instead.');throw error;}
 }));
 
 // ======================================================

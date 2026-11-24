@@ -137,14 +137,41 @@ export function platformRouter(wrap) {
         });
         res.json(saved);
     }));
+    router.get('/users/:id/workspaces',wrap(async(req,res)=>{
+        requireId(req.params.id);
+        res.json(await rows(pool,`SELECT m.tenant_id,t.name,m.role,m.admin_workspace_enabled,m.admin_module_permissions
+          FROM memberships m JOIN tenants t ON t.id=m.tenant_id
+          JOIN users u ON u.id=m.user_id WHERE m.user_id=$1 AND NOT u.platform_admin AND t.archived_at IS NULL
+          ORDER BY t.name`,[req.params.id]));
+    }));
+    router.put('/users/:id/workspaces/:tenant',wrap(async(req,res)=>{
+        requireId(req.params.id);requireId(req.params.tenant);
+        const {enabled,modules:permissions}=req.body||{};
+        if(typeof enabled!=='boolean'||!validPermissions(permissions))throw fail(400,'Invalid platform workspace access');
+        const row=await inTransaction(pool,async db=>{
+            const saved=await one(db,`UPDATE memberships m SET admin_workspace_enabled=$3,admin_module_permissions=$4
+              FROM users u,tenants t WHERE m.user_id=$1 AND m.tenant_id=$2 AND u.id=m.user_id
+              AND NOT u.platform_admin AND t.id=m.tenant_id AND t.archived_at IS NULL RETURNING m.user_id,m.tenant_id`,
+              [req.params.id,req.params.tenant,enabled,permissions]);
+            if(!saved)throw fail(404,'Workspace membership unavailable');
+            await platformAudit(db,req.user,'user.workspace_access_updated',saved.user_id,{tenant:saved.tenant_id,enabled,modules:permissions});
+            return saved;
+        });
+        res.json(row);
+    }));
     router.delete('/users/:id', wrap(async (req,res) => {
         requireId(req.params.id);
         await inTransaction(pool, async db => {
             const user = await one(db,'SELECT id,email,active FROM users WHERE id=$1 AND NOT platform_admin FOR UPDATE',[req.params.id]);
             if (!user) throw fail(404,'Editable account unavailable');
-            if (user.active || req.body.confirmation !== user.email) throw fail(409,'Deactivate the account and confirm its exact email');
+            if (reservedAdmin(email(user.email)) || req.user.id===user.id) throw fail(403,'Platform administrator cannot be deleted');
+            if (req.body?.confirmation !== user.email) throw fail(409,'Confirm the exact email');
+            const owner=await one(db,`SELECT m.tenant_id FROM memberships m WHERE m.user_id=$1 AND m.role='owner' AND NOT EXISTS(SELECT 1 FROM memberships other JOIN users u ON u.id=other.user_id WHERE other.tenant_id=m.tenant_id AND other.user_id<>m.user_id AND other.role='owner' AND other.active AND other.admin_workspace_enabled AND u.active) LIMIT 1`,[user.id]);
+            if(owner)throw fail(409,'Transfer business ownership or delete the business before deleting its only owner');
             try {
                 await db.query('DELETE FROM password_tokens WHERE user_id=$1',[user.id]);
+                await db.query('DELETE FROM invites WHERE lower(email)=lower($1) AND accepted_at IS NULL',[user.email]);
+                await db.query('DELETE FROM memberships WHERE user_id=$1',[user.id]);
                 await db.query('DELETE FROM users WHERE id=$1',[user.id]);
             } catch (error) {
                 if (error.code === '23503') throw fail(409,'Archive this account to preserve its business history');

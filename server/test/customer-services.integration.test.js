@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import pg from 'pg';
 import {test} from 'node:test';
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
@@ -56,6 +57,9 @@ test('customer service lifecycle, manual grants, tenant access and renewal histo
   email:'membership-other-'+nonce+'@example.invalid',password:'membership-test-'+nonce,
   name:'Other membership tester',shopName:'Other Member '+nonce
  });
+ const approvalDb=new pg.Pool({connectionString:database});
+ t.after(()=>approvalDb.end());
+ for(const account of [owner,outsider])await approvalDb.query('UPDATE tenants SET module_overrides=$2 WHERE id=$1',[account.shop.id,{"services":true}]);
  const [branch]=await req('shop/branches',200,{account:owner});
  const product=await post('shop/products',200,{name:'Gym access',product_type:'service',
   price_cents:199900,description:'Monthly gym membership'},owner);

@@ -118,22 +118,26 @@ test('migrations, POS reconciliation, billing and tenant isolation', {
             }))
         }
     });
-    // Employee attendance mutations require both attendance and cashier workspace authorization.
-    await post('shop/attendance/clock-in', 403, {}, employeeSession);
-    await request('shop/staff/' + employee.id + '/access', 200, {
-        method:'PUT',account:owner,body:{module_permissions:{pos:true,attendance:true},branch_ids:null}
-    });
-    await post('shop/attendance/break-start', 409, {}, employeeSession);
-    const shift = await post('shop/attendance/clock-in', 200, {}, employeeSession);
-    assert.equal(shift.branch_id, branch.id);
-    assert.equal(shift.late_minutes, Math.ceil((Date.parse(shift.clock_in) - Date.parse(shift.scheduled_start_at)) / 60000));
-    await post('shop/attendance/clock-in', 409, {}, employeeSession);
-    await post('shop/attendance/break-start', 200, {}, employeeSession);
-    await post('shop/attendance/break-start', 409, {}, employeeSession);
-    await post('shop/attendance/clock-out', 409, {}, employeeSession);
-    await post('shop/attendance/break-end', 200, {}, employeeSession);
-    await post('shop/attendance/break-end', 409, {}, employeeSession);
-    await post('shop/attendance/clock-out', 200, {}, employeeSession);
+    // Every employee, including a non-POS staff account, must reauthenticate.
+    const credentials={employee_id:employee.id,username:employeeEmail,password};
+    const employees=await request('shop/attendance/employees',200,{account:employeeSession});
+    assert(employees.some(person=>person.id===employee.id));
+    assert(employees.every(person=>!('password_hash' in person)&&!('email' in person)));
+    await post('shop/attendance/clock-in',400,{},employeeSession);
+    await post('shop/attendance/clock-in',403,{...credentials,password:'wrong-password'},employeeSession);
+    await post('shop/attendance/clock-in',403,{...credentials,employee_id:outsider.user.id},employeeSession);
+    await post('shop/attendance/break-start',409,credentials,employeeSession);
+    const shift=await post('shop/attendance/clock-in',200,credentials,employeeSession);
+    assert.equal(shift.user_id,employee.id);
+    assert.equal(shift.branch_id,branch.id);
+    assert.equal(shift.late_minutes,Math.ceil((Date.parse(shift.clock_in)-Date.parse(shift.scheduled_start_at))/60000));
+    await post('shop/attendance/clock-in',409,credentials,employeeSession);
+    await post('shop/attendance/break-start',200,credentials,employeeSession);
+    await post('shop/attendance/break-start',409,credentials,employeeSession);
+    await post('shop/attendance/clock-out',409,credentials,employeeSession);
+    await post('shop/attendance/break-end',200,credentials,employeeSession);
+    await post('shop/attendance/break-end',409,credentials,employeeSession);
+    await post('shop/attendance/clock-out',200,credentials,employeeSession);
     const history = await request('shop/attendance?user_id=' + owner.user.id, 200, { account: employeeSession });
     assert.deepEqual(history.map(row => row.user_id), [employee.id]);
     const attendance = await request('shop/attendance/summary', 200, { account: owner });

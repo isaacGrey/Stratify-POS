@@ -5,11 +5,14 @@ const defaultModules = {
     cashier: ['pos','orders','attendance','kitchen','services','appointments'],
     staff: ['attendance','kitchen']
 };
+const manualApproval = new Set(['services','appointments']);
 const workspaceWide = ['staff','settings','billing','audit'];
 
 export function moduleAccess(row) {
     const defaults = defaultModules[row.role] || [];
     return Object.fromEntries(modules.map(key => [key,
+        row.admin_workspace_enabled !== false && row.admin_module_permissions?.[key] !== false &&
+        (!manualApproval.has(key) || row.module_overrides?.[key] === true || row.admin_module_permissions?.[key] === true) &&
         (row.module_permissions?.[key] ?? row.role_permissions?.[key] ?? defaults.includes(key)) &&
         row.module_access?.[key] !== false && row.module_overrides?.[key] !== false &&
         !(row.branch_ids !== null && row.branch_ids !== undefined && workspaceWide.includes(key))
@@ -57,7 +60,7 @@ export function canUseRoute(path, method, access, branchIds) {
         case 'suppliers': return allow('inventory') && (fullWorkspace || resource === 'expenses' || read);
         case 'reports': return allow('reports');
         case 'staff': return allow('staff');
-        case 'attendance': return allow('attendance') && (read || allow('pos'));
+        case 'attendance': return allow('attendance');
         case 'branches':
             if (action === 'schedule') return allow('branches');
             if (read) return allow('branches','pos','inventory','reports','staff','attendance','promotions');

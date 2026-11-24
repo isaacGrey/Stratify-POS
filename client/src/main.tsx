@@ -450,7 +450,7 @@ const currentShop = me?.shops?.find(
 const allowed = key => currentShop?.modules?.[key] === true || (serverAvailable===false && key==='pos' && !!currentShop && !currentShop.modules && canSell);
 const visibleRoutes = routes.filter(([id]) => {
     if (id==='settings') return canManage && (allowed('settings') || allowed('billing'));
-    if (id==='staff') return canManage && (allowed('staff') || allowed('attendance'));
+    if (id==='staff') return (canManage && allowed('staff')) || allowed('attendance');
     if (id==='pos') return canSell && allowed('pos');
     if (id==='kitchen') return allowed('kitchen');
     if (id==='menu') return canManage && allowed('menu');
@@ -637,7 +637,7 @@ const activePage = me?.superAdmin && (!currentShop || page==='admin') ? 'admin'
     {['cashier','staff'].includes(role) && <div className="employee-pos-banner">
       <h2>Cashier point of sale</h2><p>Sell products and manage your own shift register. Management tools are kept separate.</p>
     </div>}
-    {serverAvailable===true && allowed('attendance') && <CashierAttendance request={request} key={shop+':'+me.user.id}/>}
+
     <OfflineSessionGuard
         tenantId={shop}
         online={serverAvailable}
@@ -3350,32 +3350,34 @@ const teamRoles = [['manager','Manager'], ['cashier','Cashier'], ['staff','Staff
 const weekDays = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const shiftDuration = seconds => seconds == null ? '—' : (Number(seconds) / 3600).toFixed(2) + ' h';
 
-function CashierAttendance({request}:{request:ApiRequest}){
-    const {data:status,load,err}=useLoad(request,'attendance/status');
-    const {data:branches}=useLoad(request,'branches');
-    const [branch,setBranch]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
-    const shift=status?.shift;
-    async function actOn(action:string){
-      if(busy)return;setBusy(true);setError('');
-      try{await request('attendance/'+action,'POST',action==='clock-in'?{branch_id:branch||null}:{});
-        load();}catch(e){setError(e instanceof Error?e.message:'Attendance failed');}finally{setBusy(false);}
-    }
-    return <Panel title="Cashier attendance">
-      <div className="padded"><p role="status">{shift?.open_break?'On break':shift?'Clocked in at '+fmt(shift.clock_in):'Clocked out'}</p>
-      {(err||error)&&<p className="flash error" role="alert">{err||error}</p>}
-      {!status&&!err?<Load/>:<div className="inline-form">
-        {!shift&&<><select aria-label="Clock-in branch" value={branch} onChange={e=>setBranch(e.target.value)}>
-          <option value="">Use scheduled branch</option>{(branches||[]).filter(b=>b.active).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select>
-          <Button disabled={busy||!status} onClick={()=>void actOn('clock-in')}><Clock size={16}/> Clock in</Button></>}
-        {shift&&!shift.open_break&&<><Button disabled={busy} onClick={()=>void actOn('break-start')}>Start break</Button>
-          <Button secondary disabled={busy} onClick={()=>void actOn('clock-out')}>Clock out</Button></>}
-        {shift?.open_break&&<Button disabled={busy} onClick={()=>void actOn('break-end')}>End break</Button>}
-      </div>}</div>
-    </Panel>;
+function EmployeeAttendance({request,onRecorded}:{request:ApiRequest;onRecorded:()=>void}){
+ const {data:employees,err:employeesError}=useLoad(request,'attendance/employees');
+ const {data:branches}=useLoad(request,'branches');
+ const [employee,setEmployee]=useState(''),[username,setUsername]=useState(''),[password,setPassword]=useState(''),[branch,setBranch]=useState('');
+ const [busy,setBusy]=useState(false),[message,setMessage]=useState(''),[error,setError]=useState('');
+ async function record(action:string){
+  if(busy||!employee||!username.trim()||!password)return;
+  setBusy(true);setError('');setMessage('');
+  try{await request('attendance/'+action,'POST',{employee_id:employee,username:username.trim(),password,branch_id:action==='clock-in'?branch||null:null});
+   setMessage('Attendance recorded successfully.');onRecorded();
+  }catch(e){setError(e instanceof Error?e.message:'Attendance could not be recorded');}
+  finally{setPassword('');setBusy(false);}
+ }
+ return <Panel title="Employee attendance"><div className="padded">
+  <p>Select your name and verify your own login credentials before each attendance action. No employee needs POS access to clock in.</p>
+  <div className="form-grid">
+   <Field label="Employee"><select value={employee} disabled={busy} onChange={e=>{setEmployee(e.target.value);setUsername('');setPassword('');setMessage('');setError('');}}><option value="">Select your name</option>{(employees||[]).map(person=><option key={person.id} value={person.id}>{person.name}</option>)}</select></Field>
+   <Field label="Username (login email)"><input type="email" autoComplete="off" value={username} disabled={busy} onChange={e=>setUsername(e.target.value)}/></Field>
+   <Field label="Password"><input type="password" autoComplete="off" value={password} disabled={busy} onChange={e=>setPassword(e.target.value)}/></Field>
+   <Field label="Clock-in branch"><select value={branch} onChange={e=>setBranch(e.target.value)}><option value="">Use assigned / scheduled branch</option>{(branches||[]).filter(b=>b.active).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></Field>
+  </div>
+  {(error||employeesError)&&<p className="flash error" role="alert">{error||employeesError}</p>}{message&&<p className="flash success" role="status">{message}</p>}
+  <div className="inline-form">{[['clock-in','Clock in'],['break-start','Start break'],['break-end','End break'],['clock-out','Clock out']].map(([action,label])=><Button key={action} secondary={action!=='clock-in'} disabled={busy||!employee||!username.trim()||!password} onClick={()=>void record(action)}>{label}</Button>)}</div>
+ </div></Panel>;
 }
 
 function Staff({ request, act, role, setNotice, access }) {
-    const manages = access?.staff !== false && (role === 'owner' || role === 'manager');
+    const manages = access?.staff === true && (role === 'owner' || role === 'manager');
     const attendanceAllowed = access?.attendance === true;
     const { data: team, load: loadTeam } = useLoad(request, manages ? 'staff' : null);
     const { data: branchList } = useLoad(request, 'branches');
@@ -3440,13 +3442,6 @@ function Staff({ request, act, role, setNotice, access }) {
         });
     }
 
-    async function attendanceAction(action, label) {
-        await save(async () => {
-            await request('attendance/' + action, 'POST', action === 'clock-in' ? { branch_id: branch || null } : {});
-            reloadAttendance();
-            setNotice(label);
-        });
-    }
 
     return <>
         <Heading title="Team & attendance" action={manages && <div className="inline-form">
@@ -3481,6 +3476,7 @@ function Staff({ request, act, role, setNotice, access }) {
             </div>]
         ]} /></Panel>}
         {attendanceAllowed && <>
+        <EmployeeAttendance request={request} onRecorded={reloadAttendance}/>
         {manages&&<Panel title="Attendance reports · payroll timecards">
          <div className="form-grid padded">
           <Field label="From"><input type="date" value={attStart} onChange={e=>setAttStart(e.target.value)}/></Field>
@@ -4445,11 +4441,12 @@ function Admin({ request, act, section }) {
                                         </button>) : (<button className="text-link danger-link" disabled={busyAdmin} onClick={() => {
                             const confirmation = window.prompt('Archive business '+shop.name+'? Access is removed, while transactions, affiliate commissions and associated records are retained. Type the exact business name to confirm:');
                             if (confirmation !== null) {
-                                run(() => request('tenants/' + shop.id, 'DELETE', { confirmation }, true));
+                                run(() => request('tenants/' + shop.id + '/archive', 'POST', { confirmation }, true));
                             }
                         }}>
-                                            Delete / archive
+                                            Archive
                                         </button>)}
+                        <button className="text-link danger-link" disabled={busyAdmin} onClick={()=>{const confirmation=window.prompt('Permanently delete '+shop.name+' and exclusive accounts? Protected financial history blocks deletion. Enter exact business name.');if(confirmation!==null)run(()=>request('tenants/'+shop.id,'DELETE',{confirmation},true));}}>Delete permanently</button>
                                 </div>)
             ]
         ]}/>
