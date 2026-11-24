@@ -562,7 +562,7 @@ app.post(
                       ON s.tenant_id = t.id
 
                     WHERE m.user_id = $1
-                      AND m.active = TRUE
+                      AND m.active = TRUE AND m.admin_workspace_enabled
                       AND t.status = 'active'
                       AND NOT t.administratively_suspended
                       AND t.archived_at IS NULL
@@ -587,7 +587,7 @@ app.post(
             if (!allowed?.permitted) {
                 const billing=await one(pool,`SELECT s.status,s.trial_ends_at FROM memberships m
                   JOIN tenants t ON t.id=m.tenant_id JOIN subscriptions s ON s.tenant_id=t.id
-                  WHERE m.user_id=$1 AND m.role='owner' AND m.active AND t.archived_at IS NULL
+                  WHERE m.user_id=$1 AND m.role='owner' AND m.active AND m.admin_workspace_enabled AND t.archived_at IS NULL
                     AND NOT t.administratively_suspended ORDER BY t.created_at DESC LIMIT 1`,[user.id]);
                 if(billing?.trial_ends_at && new Date(billing.trial_ends_at).getTime()<=Date.now()
                     && ['trial','expired'].includes(billing.status))
@@ -676,7 +676,7 @@ app.post('/api/billing/select-plan', publicLimit, wrap(async (req, res) => {
         const business = await one(db, `
             SELECT t.id,t.name
             FROM memberships m JOIN tenants t ON t.id=m.tenant_id JOIN subscriptions s ON s.tenant_id=t.id
-            WHERE m.user_id=$1 AND m.role='owner' AND m.active AND t.archived_at IS NULL
+            WHERE m.user_id=$1 AND m.role='owner' AND m.active AND m.admin_workspace_enabled AND t.archived_at IS NULL
                 AND NOT t.administratively_suspended
                 AND NOT (t.status='active' AND (
                     (s.status='trial' AND s.trial_ends_at>now()) OR
@@ -805,7 +805,7 @@ app.post(
             WHERE sp.id = $1
               AND m.user_id = $2
               AND m.role = 'owner'
-              AND m.active = TRUE
+              AND m.active = TRUE AND m.admin_workspace_enabled
               AND t.archived_at IS NULL
             `,
             [
@@ -2528,7 +2528,7 @@ function eligibleAttendance(req,member){
  return moduleAccess(member).attendance===true && (scope===null||scope.length>0);
 }
 app.get('/api/shop/attendance/employees',wrap(async(req,res)=>{
- const employees=await rows(pool,attendanceMemberQuery+' ORDER BY u.name,u.id',[req.tenant]);
+ const employees=await rows(pool,attendanceMemberQuery.replace('u.email,u.password_hash,','')+' ORDER BY u.name,u.id',[req.tenant]);
  res.json(employees.filter(member=>eligibleAttendance(req,member)).map(({id,name})=>({id,name})));
 }));
 const attendanceCredentialLimit=rateLimit({windowMs:15*60*1000,limit:40,standardHeaders:'draft-7',legacyHeaders:false});
@@ -2536,15 +2536,19 @@ for (const action of ['clock-in', 'clock-out', 'break-start', 'break-end']) {
  app.post('/api/shop/attendance/'+action,attendanceCredentialLimit,wrap(async(req,res)=>{
   const {employee_id,username,password,branch_id}=req.body||{};
   need(ident(employee_id)&&typeof username==='string'&&username.length<=254&&typeof password==='string'&&password.length>0&&Buffer.byteLength(password)<=72,'Select an employee and enter their login email and password');
-  const member=await one(pool,attendanceMemberQuery+' AND u.id=$2',[req.tenant,employee_id]);
-  if(!member||!eligibleAttendance(req,member)||email(username)!==email(member.email)||!await bcrypt.compare(password,member.password_hash))
-   throw fail(403,'Employee credentials or attendance access are invalid');
-  const scope=attendanceBranches(req.branchIds,member.branch_ids);
-  const branch=branch_id||(scope?.length===1?scope[0]:null);
-  need(!branch||ident(branch),'Invalid branch');
-  if(branch&&scope!==null&&!scope.includes(branch))throw fail(403,'Branch not authorized for this employee');
-  const result=await scoped(req.tenant,db=>recordAttendance(db,req.tenant,member.id,action,branch,scope!==null),
-   {branchIds:scope,userId:member.id});
+  const result=await inTransaction(pool,async db=>{
+   const member=await one(db,attendanceMemberQuery+' AND u.id=$2 FOR SHARE OF m,u,t,s,p',[req.tenant,employee_id]);
+   if(!member||!eligibleAttendance(req,member)||email(username)!==email(member.email)||!await bcrypt.compare(password,member.password_hash))
+    throw fail(403,'Employee credentials or attendance access are invalid');
+   const scope=attendanceBranches(req.branchIds,member.branch_ids);
+   const branch=branch_id||(scope?.length===1?scope[0]:null);
+   need(!branch||ident(branch),'Invalid branch');
+   if(branch&&scope!==null&&!scope.includes(branch))throw fail(403,'Branch not authorized for this employee');
+   await db.query('SET LOCAL ROLE coffee_saas_runtime');
+   await db.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.branch_ids',$2,true),set_config('app.user_id',$3,true)",
+    [req.tenant,scope===null?'':'{'+scope.join(',')+'}',member.id]);
+   return recordAttendance(db,req.tenant,member.id,action,branch,scope!==null);
+  });
   res.json(result);
  }));
 }
@@ -2878,6 +2882,7 @@ const checkout = quote => data(async (d, r) => {
         if(hasFood ? effectiveOrderType==='standard' : effectiveOrderType!=='standard')
           throw fail(400,'Choose restaurant fulfillment only when the cart contains food or beverage');
         if(!hasFood && table_id)throw fail(400,'Only food/beverage orders can use restaurant tables');
+        if(!r.modules.services&&lines.some(line=>line.product.product_type==='membership'))throw fail(403,'Customer Memberships module is unavailable to this workspace');
         const membershipSelections=await validateMembershipCart(d,r.tenant,lines,{
           customerId:service_customer_id,offline:Boolean(offline),held:Boolean(heldOrder),
           qr:Boolean(customerRequest),promo:promo_code,loyalty:loyalty_code});
