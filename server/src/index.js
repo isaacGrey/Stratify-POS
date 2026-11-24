@@ -207,7 +207,6 @@ const tenant = wrap(async (req, res, next) => {
     const now = Date.now();
 
     const trialValid =
-        access.plan_id === 'free' &&
         access.subscription_status === 'trial' &&
         access.trial_ends_at &&
         new Date(access.trial_ends_at).getTime() > now;
@@ -564,12 +563,12 @@ app.post(
                     WHERE m.user_id = $1
                       AND m.active = TRUE
                       AND t.status = 'active'
+                      AND NOT t.administratively_suspended
                       AND t.archived_at IS NULL
 
                       AND (
                           (
-                              s.plan_id = 'free'
-                              AND s.status = 'trial'
+                              s.status = 'trial'
                               AND s.trial_ends_at > NOW()
                           )
                           OR
@@ -585,10 +584,15 @@ app.post(
             );
 
             if (!allowed?.permitted) {
-                throw fail(
-                    403,
-                    'No active subscription. Your trial may have expired or your monthly payment is pending.'
-                );
+                const billing=await one(pool,`SELECT s.status,s.trial_ends_at FROM memberships m
+                  JOIN tenants t ON t.id=m.tenant_id JOIN subscriptions s ON s.tenant_id=t.id
+                  WHERE m.user_id=$1 AND m.role='owner' AND m.active AND t.archived_at IS NULL
+                    AND NOT t.administratively_suspended ORDER BY t.created_at DESC LIMIT 1`,[user.id]);
+                if(billing?.trial_ends_at && new Date(billing.trial_ends_at).getTime()<=Date.now()
+                    && ['trial','expired'].includes(billing.status))
+                  throw fail(403,'Your Free Trial Has Expired! Choose a subscription plan to restore access to your business workspace.');
+                if(billing)throw fail(403,'No active subscription. Your trial may have expired or your monthly payment is pending.');
+                throw fail(403,'Your business workspace is unavailable. Contact your business administrator.');
             }
         }
 
@@ -932,7 +936,7 @@ app.post(
 
         const access = await one(
             pool,
-            `SELECT t.name, t.status, s.plan_id,
+            `SELECT t.name, t.status, s.plan_id,s.status AS subscription_status,
                     s.trial_ends_at,
                     s.current_period_ends_at
              FROM tenants t
@@ -946,7 +950,7 @@ app.post(
         }
 
         const subscriptionExpiry =
-            access.plan_id === 'free'
+            access.subscription_status === 'trial'
                 ? access.trial_ends_at
                 : access.current_period_ends_at;
 
@@ -1035,8 +1039,7 @@ app.get(
 
               AND (
                   (
-                      s.plan_id = 'free'
-                      AND s.status = 'trial'
+                      s.status = 'trial'
                       AND s.trial_ends_at > NOW()
                   )
                   OR
@@ -1057,6 +1060,11 @@ app.get(
         res.json({
             user: req.user,
             affiliate:Boolean(affiliate),
+            expired_trial:Boolean((await one(pool,`SELECT EXISTS(SELECT 1 FROM memberships m
+                JOIN tenants t ON t.id=m.tenant_id JOIN subscriptions s ON s.tenant_id=t.id
+                WHERE m.user_id=$1 AND m.active AND t.archived_at IS NULL
+                  AND NOT t.administratively_suspended AND s.status IN ('trial','expired')
+                  AND s.trial_ends_at<=now()) AS expired`,[req.user.id]))?.expired),
             shops: shops.map(({ module_permissions, module_overrides, module_access, role_permissions, ...shop }) => ({
                 ...shop, modules: { ...moduleAccess({ ...shop, module_permissions, module_overrides, module_access, role_permissions }),
                   kitchen: shop.business_type==='food' && shop.kitchen_enabled===true &&
@@ -1570,11 +1578,13 @@ app.delete(
     '/api/shop/products/:id',
     permit('owner', 'manager'),
     data(async (d, r) => {
-        await d.query(
-            'UPDATE products SET active=false WHERE id=$1 AND tenant_id=$2',
-            [r.params.id, r.tenant]
-        );
-        return { ok: true };
+        need(ident(r.params.id),'Invalid product ID');
+        const product=await one(d,'SELECT id,product_type FROM products WHERE id=$1 AND tenant_id=$2 FOR UPDATE',[r.params.id,r.tenant]);
+        if(!product)throw fail(404,'Product unavailable');
+        if(product.product_type==='membership')throw fail(409,'Manage membership products through Customer Memberships');
+        await d.query('UPDATE products SET active=false WHERE id=$1 AND tenant_id=$2',[r.params.id,r.tenant]);
+        await audit(d,r,'product.deactivated',{id:r.params.id});
+        return {ok:true,archived:true};
     })
 );
 
@@ -1992,6 +2002,15 @@ app.put('/api/shop/ingredients/:id', permit('owner', 'manager'), data(async (db,
     need(req.body.quantity === undefined || inventoryQuantity(req.body.quantity) === Number(current.quantity),
         'Use a stock movement to change the balance');
     const fields = stockItemInput({ ...current, ...req.body });
+    if(fields[1]!==current.unit){
+      const used=await one(db,`SELECT EXISTS(SELECT 1 FROM stock_movements WHERE tenant_id=$1 AND ingredient_id=$2)
+       OR EXISTS(SELECT 1 FROM recipes WHERE tenant_id=$1 AND ingredient_id=$2)
+       OR EXISTS(SELECT 1 FROM variation_recipes WHERE tenant_id=$1 AND ingredient_id=$2)
+       OR EXISTS(SELECT 1 FROM addon_recipes WHERE tenant_id=$1 AND ingredient_id=$2)
+       OR EXISTS(SELECT 1 FROM products WHERE tenant_id=$1 AND stock_item_id=$2)
+       OR EXISTS(SELECT 1 FROM variations WHERE tenant_id=$1 AND stock_item_id=$2) AS used`,[req.tenant,current.id]);
+      if(Number(current.quantity)!==0||used.used)throw fail(409,'Cannot change the unit of used stock. Create a new stock item.');
+    }
     return one(db, `
         UPDATE ingredients SET name=$3, unit=$4, low_stock_at=$5, unit_cost_cents=$6,
             item_type=$7, inventory_category=$8
@@ -2003,7 +2022,7 @@ app.delete('/api/shop/ingredients/:id', permit('owner', 'manager'), data(async (
     need(ident(req.params.id), 'Invalid stock item ID');
     const result = await db.query('DELETE FROM ingredients WHERE tenant_id=$1 AND id=$2 AND quantity=0',
         [req.tenant, req.params.id]);
-    if (!result.rowCount) throw fail(409, 'Stock item is missing or still has stock');
+    if (!result.rowCount) throw fail(409, 'Stock item is missing or still has stock. Use a stock movement to reduce the balance first.');
     return { ok: true };
 }));
 
@@ -2487,6 +2506,7 @@ app.get('/api/shop/attendance/status', data(async (db, req) =>
 
 for (const action of ['clock-in', 'clock-out', 'break-start', 'break-end']) {
     app.post('/api/shop/attendance/' + action, data((db, req) => {
+        if(!req.modules.pos || !req.modules.attendance)throw fail(403,'Attendance recording requires cashier workspace access');
         const branch = req.body?.branch_id || (req.branchIds?.length === 1 ? req.branchIds[0] : null);
         need(!branch || ident(branch), 'Invalid branch');
         return recordAttendance(db, req.tenant, req.user.id, action, branch, req.branchIds !== null);
@@ -3305,8 +3325,12 @@ const adminShopDetailsSql = `
         t.archived_at, t.deactivated_at, t.administratively_suspended,
 
         s.plan_id,
-        s.status AS subscription_status,
-        s.trial_ends_at,
+        CASE WHEN t.status<>'active' OR t.archived_at IS NOT NULL OR t.administratively_suspended THEN 'suspended'
+          WHEN s.status='trial' AND s.trial_ends_at<=now() THEN 'expired'
+          WHEN s.status='active' AND s.current_period_ends_at<=now() THEN 'expired'
+          ELSE s.status END AS subscription_status,
+        s.status AS stored_subscription_status,CASE WHEN s.trial_ends_at IS NOT NULL THEN s.created_at END AS trial_started_at,s.trial_ends_at,
+        CASE WHEN s.status='trial' AND s.trial_ends_at IS NOT NULL THEN GREATEST(0,ceil(extract(epoch FROM (s.trial_ends_at-now()))/86400))::int ELSE 0 END AS trial_days_remaining,
         s.current_period_ends_at,
 
         p.title AS plan_title,
@@ -4044,343 +4068,20 @@ app.patch(
  * All operations execute in one transaction.
  */
 
-app.delete(
-    '/api/admin/tenants/:id',
-    wrap(async (req, res) => {
-
-        need(
-            ident(req.params.id),
-            'Invalid shop ID'
-        );
-
-        const db = await pool.connect();
-
-        try {
-            await db.query('BEGIN');
-
-            const shopId = req.params.id;
-
-            // ========================================
-            // 1. LOCK AND VERIFY SHOP
-            // ========================================
-
-            const shop = await one(
-                db,
-                `
-                SELECT id, name
-                FROM tenants
-                WHERE id = $1
-                FOR UPDATE
-                `,
-                [shopId]
-            );
-
-            if (!shop) {
-                throw fail(404, 'Shop not found');
-            }
-
-            need(
-                req.body?.confirmation === shop.name,
-                'Type the exact shop name to confirm deletion'
-            );
-
-            console.log(
-                '[SHOP DELETE] Starting:',
-                shop.id
-            );
-
-            // ========================================
-            // 2. FIND EXCLUSIVE OWNER / STAFF USERS
-            // ========================================
-
-            // No DISTINCT with FOR UPDATE.
-            // A user is exclusive only when there
-            // are no memberships in other shops.
-
-            const exclusiveUsers = await rows(
-                db,
-                `
-                SELECT u.id
-                FROM users u
-
-                WHERE EXISTS (
-                    SELECT 1
-                    FROM memberships m
-                    WHERE m.user_id = u.id
-                      AND m.tenant_id = $1
-                )
-
-                AND NOT EXISTS (
-                    SELECT 1
-                    FROM memberships other_m
-                    WHERE other_m.user_id = u.id
-                      AND other_m.tenant_id <> $1
-                )
-
-                AND LOWER(u.email) <> LOWER($2)
-
-                FOR UPDATE OF u
-                `,
-                [
-                    shopId,
-                    process.env.SUPERADMIN_EMAIL || ''
-                ]
-            );
-
-            const exclusiveUserIds =
-                exclusiveUsers.map(u => u.id);
-
-            console.log(
-                '[SHOP DELETE] Exclusive accounts:',
-                exclusiveUserIds.length
-            );
-
-            // Fail closed before any destructive mutation when ledger, checkout
-            // cost or kitchen records would be orphaned. Existing immutable
-            // financial journals must follow a documented retention/erasure
-            // workflow rather than bypassing append-only triggers.
-            const operationalHistory = await one(db,`
-                SELECT (
-                    (SELECT count(*) FROM register_sessions WHERE tenant_id=$1) +
-                    (SELECT count(*) FROM register_movements WHERE tenant_id=$1) +
-                    (SELECT count(*) FROM sales_refunds WHERE tenant_id=$1) +
-                    (SELECT count(*) FROM purchase_orders WHERE tenant_id=$1) +
-                    (SELECT count(*) FROM order_cost_components WHERE tenant_id=$1) +
-                    (SELECT count(*) FROM kitchen_tickets WHERE tenant_id=$1) +
-                    (SELECT count(*) FROM customer_order_requests WHERE tenant_id=$1) +
-                    (SELECT count(*) FROM public_menu_links WHERE tenant_id=$1) +
-                    (SELECT count(*) FROM parked_orders WHERE tenant_id=$1) +
-                    (SELECT count(*) FROM service_entitlements WHERE tenant_id=$1) +
-                    (SELECT count(*) FROM service_entitlement_events WHERE tenant_id=$1)
-                )::bigint AS records
-            `,[shopId]);
-            if(Number(operationalHistory.records)>0){
-                throw fail(409,'Business has retained operational records; archive the business or use the approved ledger-retention and erasure procedure.');
-            }
-
-            // Do not erase linked affiliate referrals or commission financial history.
-            // Archival remains available instead of bypassing the financial retention policy.
-            const referred = await one(db,
-                'SELECT tenant_id FROM affiliate_referrals WHERE tenant_id=$1',[shopId]);
-            if(referred)throw fail(409,'This business has affiliate referral history; archive it instead of permanently deleting it.');
-
-            // ========================================
-            // 3. DELETE SHOP DEPENDENT RECORDS
-            // ========================================
-
-            // Order matters because PostgreSQL
-            // enforces foreign-key constraints.
-            //
-            // All table names are hardcoded below;
-            // none come from user input.
-
-            const deleteOrder = [
-
-                // Read-only financial journals are protected by immutable triggers.
-                // Tenant erasure is a separately audited privileged operation; do
-                // not silently bypass the immutable ledger protection.
-                // In deployments containing operational ledger data this requires
-                // an explicit controlled retention/erasure procedure.
-                // Child records referencing orders,
-                // products or ingredients.
-                'service_plans',
-                'service_customers',
-                'order_items',
-                'stock_movements',
-                'recipes',
-                'variations',
-
-                // Orders and employee activities.
-                'orders',
-                'loyalty_accounts',
-                'attendance',
-                'audit_logs',
-
-                // Subscription billing records.
-                'plan_change_requests',
-                'subscription_payments',
-
-                // Invitations and memberships.
-                'invites',
-                'workspace_role_permissions',
-                'memberships',
-
-                // Other shop records.
-                'expenses',
-                'promotions',
-                'addons',
-                'suppliers',
-
-                // Physical tables must be removed
-                // before branches.
-                'tables',
-
-                // Products before categories.
-                'products',
-                'categories',
-
-                // Ingredients after recipes
-                // and stock movements.
-                'branch_stock_balances',
-                'ingredients',
-
-                // Branches after orders,
-                // attendance and tables.
-                'branches',
-
-                // Subscription and shop settings.
-                'shop_settings',
-                'subscriptions'
-            ];
-
-            const deletedRecords = {};
-
-            for (const table of deleteOrder) {
-
-                const result = await db.query(
-                    `
-                    DELETE FROM ${table}
-                    WHERE tenant_id = $1
-                    `,
-                    [shopId]
-                );
-
-                deletedRecords[table] =
-                    result.rowCount;
-
-                console.log(
-                    `[SHOP DELETE] ${table}:`,
-                    result.rowCount
-                );
-            }
-
-            // ========================================
-            // 4. DELETE SHOP
-            // ========================================
-
-            const deletedShop = await one(
-                db,
-                `
-                DELETE FROM tenants
-                WHERE id = $1
-                RETURNING id, name
-                `,
-                [shopId]
-            );
-
-            if (!deletedShop) {
-                throw fail(
-                    404,
-                    'Shop could not be deleted'
-                );
-            }
-
-            // ========================================
-            // 5. DELETE EXCLUSIVE USER ACCOUNTS
-            // ========================================
-
-            let deletedUsers = [];
-
-            if (exclusiveUserIds.length > 0) {
-
-                // Remove password reset tokens first.
-                await db.query(
-                    `
-                    DELETE FROM password_tokens
-                    WHERE user_id = ANY($1::uuid[])
-                    `,
-                    [exclusiveUserIds]
-                );
-
-                // Double-check that these accounts
-                // have no remaining memberships.
-                //
-                // This also protects users who may
-                // have access to another shop.
-
-                deletedUsers = await rows(
-                    db,
-                    `
-                    DELETE FROM users u
-                    WHERE u.id = ANY($1::uuid[])
-
-                      AND LOWER(u.email) <> LOWER($2)
-
-                      AND NOT EXISTS (
-                          SELECT 1
-                          FROM memberships m
-                          WHERE m.user_id = u.id
-                      )
-
-                    RETURNING u.id
-                    `,
-                    [
-                        exclusiveUserIds,
-                        process.env.SUPERADMIN_EMAIL || ''
-                    ]
-                );
-            }
-
-            // ========================================
-            // 6. COMMIT ALL DELETIONS
-            // ========================================
-
-            await platformAudit(db, req.user, 'business.deleted', shopId);
-            await db.query('COMMIT');
-
-            console.log(
-                '[SHOP DELETE] Completed:',
-                shopId
-            );
-
-            res.json({
-                ok: true,
-
-                message:
-                    'Shop and exclusive user accounts permanently deleted.',
-
-                deleted_shop: deletedShop,
-
-                deleted_user_count:
-                    deletedUsers.length,
-
-                deleted_records:
-                    deletedRecords
-            });
-
-        } catch (error) {
-
-            await db.query('ROLLBACK');
-
-            console.error(
-                '[SHOP DELETE] Failed:',
-                {
-                    code: error.code,
-                    constraint: error.constraint,
-                    table: error.table,
-                    detail: error.detail,
-                    message: error.message
-                }
-            );
-
-            if (error.code === '23503') {
-                throw fail(
-                    409,
-                    'Deletion blocked by a foreign-key dependency. No records were deleted. Check the server terminal for the exact constraint.'
-                );
-            }
-
-            throw error;
-
-        } finally {
-
-            db.release();
-
-        }
-    })
-);
-
-
+app.delete('/api/admin/tenants/:id',wrap(async(req,res)=>{
+    need(ident(req.params.id),'Invalid shop ID');
+    const result=await inTransaction(pool,async db=>{
+        const shop=await one(db,'SELECT id,name,archived_at FROM tenants WHERE id=$1 FOR UPDATE',[req.params.id]);
+        if(!shop)throw fail(404,'Business not found');
+        need(req.body?.confirmation===shop.name,'Type the exact business name to confirm deletion');
+        if(shop.archived_at)return {id:shop.id,name:shop.name,archived_at:shop.archived_at};
+        const archived=await one(db,`UPDATE tenants SET archived_at=now(),deactivated_at=now(),
+          status='suspended',administratively_suspended=true WHERE id=$1 RETURNING id,name,archived_at`,[shop.id]);
+        await platformAudit(db,req.user,'business.archived',shop.id,{name:shop.name,retained_financial_history:true});
+        return archived;
+    });
+    res.json({ok:true,archived:true,business:result,message:'Business removed from active workspaces. Associated records and financial history retained.'});
+}));
 
 // ======================================================
 // 8. RESTORE ARCHIVED SHOP
@@ -4427,7 +4128,8 @@ app.patch(
             status,
             plan_id,
             current_period_ends_at = null,
-            trial_ends_at = null
+            trial_ends_at = null,
+            trial_days = null
         } = req.body;
 
         need(
@@ -4443,7 +4145,13 @@ app.patch(
         );
 
         const expiry = current_period_ends_at || null;
-        const trial = trial_ends_at || null;
+        let trial = trial_ends_at || null;
+        if(trial_days!==null){
+            need(status==='trial' && Number.isInteger(trial_days) && trial_days>=1 && trial_days<=365,'Trial duration must be 1–365 days');
+            const existing=await one(pool,'SELECT created_at FROM subscriptions WHERE tenant_id=$1',[req.params.id]);
+            if(!existing)throw fail(404,'Subscription missing');
+            trial=new Date(new Date(existing.created_at).getTime()+trial_days*86400000).toISOString();
+        }
 
         if (expiry) {
             need(
