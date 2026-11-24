@@ -70,8 +70,12 @@ export function AffiliateAdmin({adminReq,request}:{adminReq:(path:string)=>Promi
     onChange={e=>setQ(e.target.value)}/>}>
    <Table items={filtered} columns={[
     ['name','Affiliate'],['referral_code','Referral code'],
-    ['referred_businesses','Referred businesses'],
+    ['referred_businesses','Successful registrations'],
+    ['active_subscriptions','Active subscriptions'],
+    ['sales_cents','Verified subscription sales',money],
     ['earned_cents','Net earnings',money],
+    ['pending_cents','Pending commissions',money],
+    ['paid_cents','Paid out',money],
     ['commission_rate_override_bps','Commission rate',percent],
     ['status','Status'],
     ['id','Actions',(_id,a:Affiliate)=><div className="inline-form">
