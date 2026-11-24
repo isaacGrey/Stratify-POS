@@ -37,7 +37,7 @@ export function KitchenDisplay({request}:{request:ApiRequest}) {
    window.addEventListener('focus',refresh);
    return ()=>{window.clearInterval(id);window.removeEventListener('focus',refresh);};
  },[load]);
- const tickets=(data||[]).filter(ticket=>showCompleted||ticket.status!=='completed').sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime());
+ const tickets=(data||[]).filter(ticket=>showCompleted||ticket.status!=='completed').sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime() || String(b.id).localeCompare(String(a.id)));
  const next={pending:'preparing',preparing:'ready',ready:'completed'};
  const action={pending:'Start preparation',preparing:'Mark ready',ready:'Complete'};
  async function update(ticket) {
@@ -70,7 +70,9 @@ export function KitchenDisplay({request}:{request:ApiRequest}) {
 function LocalQrCode({url,label}:{url:string;label:string}) {
  const container=React.useRef<HTMLDivElement>(null);
  const [failure,setFailure]=useState('');
+ const [ready,setReady]=useState(false);
  useEffect(()=>{
+   setReady(false);
    let disposed=false;
    const global=window as Window & {QRCode?:any};
    const draw=()=>{
@@ -82,6 +84,7 @@ function LocalQrCode({url,label}:{url:string;label:string}) {
          colorDark:'#152b20',colorLight:'#ffffff',
          correctLevel:global.QRCode.CorrectLevel.M
        });
+       setReady(Boolean(container.current.querySelector('canvas')));
        setFailure('');
      }catch{setFailure('Unable to generate QR. Copy the secure menu link instead.');}
    };
@@ -100,6 +103,19 @@ function LocalQrCode({url,label}:{url:string;label:string}) {
  return <div className="qr-local">
    <div ref={container} role="img" aria-label={label}/>
    {failure&&<small role="status">{failure}</small>}
+   <Button secondary disabled={!ready} onClick={()=>{
+     const qr=container.current?.querySelector('canvas');if(!qr)return;
+     const image=document.createElement('canvas');image.width=800;image.height=800;
+     const ctx=image.getContext('2d');if(!ctx)return;
+     ctx.fillStyle='#ffffff';ctx.fillRect(0,0,800,800);
+     ctx.imageSmoothingEnabled=false;ctx.drawImage(qr,80,80,640,640);
+     image.toBlob(blob=>{if(!blob)return;const objectUrl=URL.createObjectURL(blob);
+       const a=document.createElement('a');a.href=objectUrl;
+       a.download=label.toLowerCase().replace(/[^a-z0-9]+/g,'-')+'.png';
+       document.body.appendChild(a);a.click();a.remove();
+       window.setTimeout(()=>URL.revokeObjectURL(objectUrl),30000);
+     },'image/png');
+   }}>Download QR Code</Button>
  </div>;
 }
 
