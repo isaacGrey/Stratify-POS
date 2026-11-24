@@ -57,7 +57,7 @@ export function canUseRoute(path, method, access, branchIds) {
         case 'suppliers': return allow('inventory') && (fullWorkspace || resource === 'expenses' || read);
         case 'reports': return allow('reports');
         case 'staff': return allow('staff');
-        case 'attendance': return allow('attendance');
+        case 'attendance': return allow('attendance') && (read || allow('pos'));
         case 'branches':
             if (action === 'schedule') return allow('branches');
             if (read) return allow('branches','pos','inventory','reports','staff','attendance','promotions');
